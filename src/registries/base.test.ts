@@ -143,7 +143,7 @@ describe('RegistryProxy.handleRequest – passthrough requests', () => {
 });
 
 describe('RegistryProxy.handleRequest – header forwarding', () => {
-  it('forwards accept, accept-encoding, and authorization headers', async () => {
+  it('does not forward request headers to upstream', async () => {
     const data = { name: 'pkg', versions: {}, time: {}, 'dist-tags': {} };
     mockedGet.mockResolvedValue({ status: 200, data, headers: {} });
 
@@ -156,23 +156,7 @@ describe('RegistryProxy.handleRequest – header forwarding', () => {
 
     await proxy.handleRequest(req, makeRes());
 
-    const forwardedHeaders = mockedGet.mock.calls[0][1]?.headers as Record<string, string>;
-    expect(forwardedHeaders).toMatchObject({
-      accept: 'application/vnd.npm.install-v1+json',
-      'accept-encoding': 'gzip',
-      authorization: 'Bearer secret-token',
-    });
-    expect(forwardedHeaders).not.toHaveProperty('x-custom-header');
-  });
-
-  it('omits header fields that are absent in the request', async () => {
-    const data = { name: 'pkg', versions: {}, time: {}, 'dist-tags': {} };
-    mockedGet.mockResolvedValue({ status: 200, data, headers: {} });
-
-    await proxy.handleRequest(makeReq('/pkg', {}), makeRes());
-
-    const forwardedHeaders = mockedGet.mock.calls[0][1]?.headers as Record<string, string>;
-    expect(forwardedHeaders).not.toHaveProperty('accept');
-    expect(forwardedHeaders).not.toHaveProperty('authorization');
+    const forwardedHeaders = mockedGet.mock.calls[0][1]?.headers as Record<string, string> | undefined;
+    expect(forwardedHeaders).toBeUndefined();
   });
 });
