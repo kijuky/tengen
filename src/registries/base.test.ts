@@ -1,0 +1,178 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Request, Response } from 'express';
+import { RegistryProxy } from './base.ts';
+
+vi.mock('axios', () => ({
+  default: { get: vi.fn() },
+}));
+
+import axios from 'axios';
+const mockedGet = vi.mocked(axios.get);
+
+// Minimal concrete implementation for testing the base class
+class TestProxy extends RegistryProxy {
+  readonly name = 'test';
+
+  isMetadataPath(path: string): boolean {
+    return !path.includes('/tarball/');
+  }
+
+  filterMetadata(data: unknown, _cutoffDate: Date): unknown {
+    return data;
+  }
+}
+
+const proxy = new TestProxy({ upstream: 'https://upstream.example.com', delayMs: 0 });
+
+function makeReq(
+  path = '/pkg',
+  headers: Record<string, string> = {},
+): Request {
+  return { path, url: path, headers } as unknown as Request;
+}
+
+function makeRes(): Response {
+  const res = { headersSent: false } as Record<string, unknown>;
+  res.status = vi.fn().mockReturnValue(res);
+  res.json = vi.fn().mockReturnValue(res);
+  res.setHeader = vi.fn();
+  return res as unknown as Response;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('RegistryProxy.handleRequest – metadata requests', () => {
+  it('fetches upstream metadata and returns filtered result on 200', async () => {
+    const data = { name: 'pkg', versions: {}, time: {}, 'dist-tags': {} };
+    mockedGet.mockResolvedValue({ status: 200, data, headers: {} });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/pkg'), res);
+
+    expect(mockedGet).toHaveBeenCalledWith(
+      'https://upstream.example.com/pkg',
+      expect.objectContaining({ validateStatus: expect.any(Function) }),
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(data);
+  });
+
+  it('proxies non-200 status codes without filtering', async () => {
+    const data = { error: 'not_found', reason: 'document not found' };
+    mockedGet.mockResolvedValue({ status: 404, data });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/nonexistent'), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith(data);
+  });
+
+  it('returns 502 Bad Gateway when upstream request throws', async () => {
+    mockedGet.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/pkg'), res);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Bad Gateway' }),
+    );
+  });
+
+  it('does not double-respond when headers are already sent on error', async () => {
+    mockedGet.mockRejectedValue(new Error('network error'));
+
+    const res = makeRes();
+    (res as unknown as Record<string, unknown>).headersSent = true;
+
+    await proxy.handleRequest(makeReq('/pkg'), res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.json).not.toHaveBeenCalled();
+  });
+});
+
+describe('RegistryProxy.handleRequest – passthrough requests', () => {
+  it('streams the tarball response and sets the upstream status', async () => {
+    const mockStream = { pipe: vi.fn() };
+    mockedGet.mockResolvedValue({ status: 200, data: mockStream, headers: {} });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/pkg/tarball/pkg-1.0.0.tgz'), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  });
+
+  it('forwards upstream response headers, skipping transfer-encoding and connection', async () => {
+    const mockStream = { pipe: vi.fn() };
+    mockedGet.mockResolvedValue({
+      status: 200,
+      data: mockStream,
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-length': '12345',
+        'transfer-encoding': 'chunked',
+        'connection': 'keep-alive',
+      },
+    });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/pkg/tarball/pkg-1.0.0.tgz'), res);
+
+    expect(res.setHeader).toHaveBeenCalledWith('content-type', 'application/octet-stream');
+    expect(res.setHeader).toHaveBeenCalledWith('content-length', '12345');
+    expect(res.setHeader).not.toHaveBeenCalledWith('transfer-encoding', expect.anything());
+    expect(res.setHeader).not.toHaveBeenCalledWith('connection', expect.anything());
+  });
+
+  it('requests upstream with responseType stream', async () => {
+    const mockStream = { pipe: vi.fn() };
+    mockedGet.mockResolvedValue({ status: 200, data: mockStream, headers: {} });
+
+    await proxy.handleRequest(makeReq('/pkg/tarball/pkg-1.0.0.tgz'), makeRes());
+
+    expect(mockedGet).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ responseType: 'stream' }),
+    );
+  });
+});
+
+describe('RegistryProxy.handleRequest – header forwarding', () => {
+  it('forwards accept, accept-encoding, and authorization headers', async () => {
+    const data = { name: 'pkg', versions: {}, time: {}, 'dist-tags': {} };
+    mockedGet.mockResolvedValue({ status: 200, data, headers: {} });
+
+    const req = makeReq('/pkg', {
+      accept: 'application/vnd.npm.install-v1+json',
+      'accept-encoding': 'gzip',
+      authorization: 'Bearer secret-token',
+      'x-custom-header': 'should-not-forward',
+    });
+
+    await proxy.handleRequest(req, makeRes());
+
+    const forwardedHeaders = mockedGet.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(forwardedHeaders).toMatchObject({
+      accept: 'application/vnd.npm.install-v1+json',
+      'accept-encoding': 'gzip',
+      authorization: 'Bearer secret-token',
+    });
+    expect(forwardedHeaders).not.toHaveProperty('x-custom-header');
+  });
+
+  it('omits header fields that are absent in the request', async () => {
+    const data = { name: 'pkg', versions: {}, time: {}, 'dist-tags': {} };
+    mockedGet.mockResolvedValue({ status: 200, data, headers: {} });
+
+    await proxy.handleRequest(makeReq('/pkg', {}), makeRes());
+
+    const forwardedHeaders = mockedGet.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(forwardedHeaders).not.toHaveProperty('accept');
+    expect(forwardedHeaders).not.toHaveProperty('authorization');
+  });
+});
