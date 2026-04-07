@@ -44,7 +44,9 @@ export abstract class RegistryProxy {
   /** Entry point called by the Express router for every incoming request. */
   async handleRequest(req: Request, res: Response): Promise<void> {
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    const upstreamUrl = `${this.config.upstream}${req.url}`;
+    const upstreamBase = new URL(this.config.upstream);
+    const reqUrl = new URL(req.url, upstreamBase);
+    const upstreamUrl = `${upstreamBase.origin}${reqUrl.pathname}${reqUrl.search}`;
 
     try {
       if (this.isMetadataPath(req.path)) {
@@ -103,7 +105,7 @@ export abstract class RegistryProxy {
 
   private selectForwardHeaders(req: Request): Record<string, string> {
     const headers: Record<string, string> = {};
-    const forward = ["accept", "accept-encoding", "authorization"];
+    const forward = ["accept", "accept-encoding"];
     for (const key of forward) {
       const value = req.headers[key];
       if (typeof value === "string") headers[key] = value;
