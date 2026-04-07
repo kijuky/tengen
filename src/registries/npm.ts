@@ -1,17 +1,9 @@
 import { RegistryProxy } from './base.ts';
 
-interface NpmVersionInfo {
-  dist: {
-    tarball: string;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
 interface NpmPackageMetadata {
   name: string;
   'dist-tags': Record<string, string>;
-  versions: Record<string, NpmVersionInfo>;
+  versions: Record<string, unknown>;
   /** Keys: version strings + "created" + "modified" */
   time: Record<string, string>;
   [key: string]: unknown;
@@ -46,7 +38,7 @@ export class NpmRegistryProxy extends RegistryProxy {
     }
 
     // Filter versions object
-    const filteredVersions: Record<string, NpmVersionInfo> = {};
+    const filteredVersions: Record<string, unknown> = {};
     for (const [version, info] of Object.entries(pkg.versions)) {
       if (allowedVersions.has(version)) {
         filteredVersions[version] = info;
