@@ -4,8 +4,8 @@
   "description": "Package registry proxy with version delay filtering",
   "type": "module",
   "scripts": {
-    "start": "node --experimental-strip-types src/index.ts",
-    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
