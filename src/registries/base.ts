@@ -68,7 +68,6 @@ export abstract class RegistryProxy {
     cutoffDate: Date,
   ): Promise<void> {
     const response = await axios.get<unknown>(upstreamUrl, {
-      headers: this.selectForwardHeaders(req),
       validateStatus: () => true,
       maxRedirects: 0,
     });
@@ -92,7 +91,6 @@ export abstract class RegistryProxy {
     upstreamUrl: string,
   ): Promise<void> {
     const response = await axios.get<NodeJS.ReadableStream>(upstreamUrl, {
-      headers: this.selectForwardHeaders(req),
       responseType: "stream",
       validateStatus: () => true,
       maxRedirects: 0,
@@ -101,16 +99,6 @@ export abstract class RegistryProxy {
     res.status(response.status);
     this.forwardResponseHeaders(response.headers, res);
     response.data.pipe(res);
-  }
-
-  private selectForwardHeaders(req: Request): Record<string, string> {
-    const headers: Record<string, string> = {};
-    const forward = ["accept", "accept-encoding"];
-    for (const key of forward) {
-      const value = req.headers[key];
-      if (typeof value === "string") headers[key] = value;
-    }
-    return headers;
   }
 
   private forwardResponseHeaders(
