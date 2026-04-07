@@ -1,5 +1,8 @@
-import type { Request, Response } from 'express';
-import axios, { type AxiosResponseHeaders, type RawAxiosResponseHeaders } from 'axios';
+import type { Request, Response } from "express";
+import axios, {
+  type AxiosResponseHeaders,
+  type RawAxiosResponseHeaders,
+} from "axios";
 
 export interface RegistryConfig {
   /** Upstream registry base URL */
@@ -34,8 +37,9 @@ export abstract class RegistryProxy {
   /**
    * Filter the upstream metadata, removing any versions released
    * after cutoffDate.  Must not mutate the original object.
+   * Returns null when all versions are filtered out (treat as 404).
    */
-  abstract filterMetadata(data: unknown, cutoffDate: Date): unknown;
+  abstract filterMetadata(data: unknown, cutoffDate: Date): unknown | null;
 
   /** Entry point called by the Express router for every incoming request. */
   async handleRequest(req: Request, res: Response): Promise<void> {
@@ -50,7 +54,7 @@ export abstract class RegistryProxy {
       }
     } catch (err) {
       if (!res.headersSent) {
-        res.status(502).json({ error: 'Bad Gateway', message: String(err) });
+        res.status(502).json({ error: "Bad Gateway", message: String(err) });
       }
     }
   }
@@ -72,6 +76,10 @@ export abstract class RegistryProxy {
     }
 
     const filtered = this.filterMetadata(response.data, cutoffDate);
+    if (filtered === null) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
     res.status(200).json(filtered);
   }
 
@@ -82,7 +90,7 @@ export abstract class RegistryProxy {
   ): Promise<void> {
     const response = await axios.get<NodeJS.ReadableStream>(upstreamUrl, {
       headers: this.selectForwardHeaders(req),
-      responseType: 'stream',
+      responseType: "stream",
       validateStatus: () => true,
     });
 
@@ -93,10 +101,10 @@ export abstract class RegistryProxy {
 
   private selectForwardHeaders(req: Request): Record<string, string> {
     const headers: Record<string, string> = {};
-    const forward = ['accept', 'accept-encoding', 'authorization'];
+    const forward = ["accept", "accept-encoding", "authorization"];
     for (const key of forward) {
       const value = req.headers[key];
-      if (typeof value === 'string') headers[key] = value;
+      if (typeof value === "string") headers[key] = value;
     }
     return headers;
   }
@@ -105,7 +113,7 @@ export abstract class RegistryProxy {
     headers: AxiosResponseHeaders | RawAxiosResponseHeaders,
     res: Response,
   ): void {
-    const skip = new Set(['transfer-encoding', 'connection']);
+    const skip = new Set(["transfer-encoding", "connection"]);
     for (const [key, value] of Object.entries(headers)) {
       if (!skip.has(key.toLowerCase()) && value !== undefined) {
         res.setHeader(key, value as string | string[]);

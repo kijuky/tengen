@@ -21,7 +21,7 @@ export class NpmRegistryProxy extends RegistryProxy {
     return !path.includes('/-/');
   }
 
-  filterMetadata(data: unknown, cutoffDate: Date): unknown {
+  filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
     const pkg = data as NpmPackageMetadata;
 
     if (!pkg.versions || !pkg.time) {
@@ -35,6 +35,11 @@ export class NpmRegistryProxy extends RegistryProxy {
       if (new Date(publishedAt) <= cutoffDate) {
         allowedVersions.add(key);
       }
+    }
+
+    // If all versions are filtered out, treat as if the package doesn't exist
+    if (allowedVersions.size === 0) {
+      return null;
     }
 
     // Filter versions object

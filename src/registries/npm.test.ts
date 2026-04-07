@@ -122,7 +122,7 @@ describe('NpmRegistryProxy.filterMetadata', () => {
     expect(result['dist-tags'].beta).toBe('1.1.0');
   });
 
-  it('drops dist-tags entirely when no versions are allowed', () => {
+  it('returns null when all versions are filtered out (treat package as not found)', () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.0.0' },
@@ -134,9 +134,7 @@ describe('NpmRegistryProxy.filterMetadata', () => {
       },
     };
 
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    expect(Object.keys(result['dist-tags'])).toHaveLength(0);
-    expect(Object.keys(result.versions)).toHaveLength(0);
+    expect(proxy.filterMetadata(data, CUTOFF)).toBeNull();
   });
 
   it('preserves other top-level package fields', () => {
