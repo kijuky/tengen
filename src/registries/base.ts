@@ -68,6 +68,7 @@ export abstract class RegistryProxy {
     const response = await axios.get<unknown>(upstreamUrl, {
       headers: this.selectForwardHeaders(req),
       validateStatus: () => true,
+      maxRedirects: 0,
     });
 
     if (response.status !== 200) {
@@ -92,6 +93,7 @@ export abstract class RegistryProxy {
       headers: this.selectForwardHeaders(req),
       responseType: "stream",
       validateStatus: () => true,
+      maxRedirects: 0,
     });
 
     res.status(response.status);
