@@ -9,7 +9,12 @@ describe('loadConfig', () => {
   it('returns defaults when no args are provided', () => {
     const config = loadConfig([]);
     expect(config.port).toBe(3000);
-    expect(config.upstream).toBe('https://registry.npmjs.org');
+    expect(config.upstreams.npm).toBe('https://registry.npmjs.org');
+    expect(config.upstreams.pypi).toBe('https://pypi.org');
+    expect(config.upstreams.rubygems).toBe('https://rubygems.org');
+    expect(config.upstreams.go).toBe('https://proxy.golang.org');
+    expect(config.upstreams.composer).toBe('https://packagist.org');
+    expect(config.upstreams.maven).toBe('https://repo1.maven.org/maven2');
     expect(config.delayDays).toBe(7);
   });
 
@@ -23,14 +28,34 @@ describe('loadConfig', () => {
     expect(config.port).toBe(9000);
   });
 
-  it('parses --upstream', () => {
-    const config = loadConfig(['--upstream', 'https://my-registry.example.com']);
-    expect(config.upstream).toBe('https://my-registry.example.com');
+  it('parses --npm-upstream', () => {
+    const config = loadConfig(['--npm-upstream', 'https://my-npm.example.com']);
+    expect(config.upstreams.npm).toBe('https://my-npm.example.com');
   });
 
-  it('parses -u shorthand', () => {
-    const config = loadConfig(['-u', 'https://my-registry.example.com']);
-    expect(config.upstream).toBe('https://my-registry.example.com');
+  it('parses --pypi-upstream', () => {
+    const config = loadConfig(['--pypi-upstream', 'https://my-pypi.example.com']);
+    expect(config.upstreams.pypi).toBe('https://my-pypi.example.com');
+  });
+
+  it('parses --rubygems-upstream', () => {
+    const config = loadConfig(['--rubygems-upstream', 'https://my-gems.example.com']);
+    expect(config.upstreams.rubygems).toBe('https://my-gems.example.com');
+  });
+
+  it('parses --go-upstream', () => {
+    const config = loadConfig(['--go-upstream', 'https://my-go.example.com']);
+    expect(config.upstreams.go).toBe('https://my-go.example.com');
+  });
+
+  it('parses --composer-upstream', () => {
+    const config = loadConfig(['--composer-upstream', 'https://my-composer.example.com']);
+    expect(config.upstreams.composer).toBe('https://my-composer.example.com');
+  });
+
+  it('parses --maven-upstream', () => {
+    const config = loadConfig(['--maven-upstream', 'https://my-maven.example.com']);
+    expect(config.upstreams.maven).toBe('https://my-maven.example.com');
   });
 
   it('parses --delay-days', () => {
@@ -49,9 +74,15 @@ describe('loadConfig', () => {
   });
 
   it('parses multiple options together', () => {
-    const config = loadConfig(['-p', '4000', '-u', 'https://example.com', '-d', '3']);
+    const config = loadConfig([
+      '-p', '4000',
+      '--npm-upstream', 'https://npm.example.com',
+      '--pypi-upstream', 'https://pypi.example.com',
+      '-d', '3',
+    ]);
     expect(config.port).toBe(4000);
-    expect(config.upstream).toBe('https://example.com');
+    expect(config.upstreams.npm).toBe('https://npm.example.com');
+    expect(config.upstreams.pypi).toBe('https://pypi.example.com');
     expect(config.delayDays).toBe(3);
   });
 
