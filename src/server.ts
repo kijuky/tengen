@@ -23,7 +23,18 @@ export function createServer(config: Config): express.Express {
 
   for (const registry of registries) {
     app.use(`/${registry.name}`, (req, res) => {
+      const start = Date.now();
+      console.log(`[${registry.name}] ${req.method} ${req.path}`);
+
+      res.on("finish", () => {
+        const ms = Date.now() - start;
+        console.log(
+          `[${registry.name}] ${req.method} ${req.path} -> ${res.statusCode} (${ms}ms)`
+        );
+      });
+
       registry.handleRequest(req, res).catch((err) => {
+        console.error(`[${registry.name}] ${req.method} ${req.path} error:`, err);
         if (!res.headersSent) {
           res
             .status(500)
