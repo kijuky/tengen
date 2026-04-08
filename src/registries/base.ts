@@ -105,7 +105,7 @@ export abstract class RegistryProxy {
     headers: AxiosResponseHeaders | RawAxiosResponseHeaders,
     res: Response,
   ): void {
-    const skip = new Set(["transfer-encoding", "connection"]);
+    const skip = new Set(["transfer-encoding", "connection", "accept"]);
     for (const [key, value] of Object.entries(headers)) {
       if (!skip.has(key.toLowerCase()) && value !== undefined) {
         res.setHeader(key, value as string | string[]);

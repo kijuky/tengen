@@ -18,16 +18,46 @@ describe('PypiRegistryProxy.isMetadataPath', () => {
     expect(proxy.isMetadataPath('/pypi/requests/2.31.0/json')).toBe(true);
   });
 
-  it('returns false for binary artifact paths', () => {
+  it('returns false for Simple API and binary artifact paths', () => {
+    expect(proxy.isMetadataPath('/pypi/requests/')).toBe(false);
     expect(proxy.isMetadataPath('/packages/ab/cd/requests-2.31.0.tar.gz')).toBe(false);
-    expect(proxy.isMetadataPath('/simple/requests/')).toBe(false);
   });
 });
 
 describe('PypiRegistryProxy.filterMetadata', () => {
-  it('returns data unchanged when releases field is missing', () => {
+  it('returns data unchanged when releases and urls are missing', () => {
     const data = { info: { name: 'pkg', version: '1.0.0' } };
     expect(proxy.filterMetadata(data, CUTOFF)).toBe(data);
+  });
+
+  describe('version-specific endpoint (no releases field)', () => {
+    it('returns null when urls are after cutoff', () => {
+      const data = {
+        info: { name: 'pkg', version: '1.1.0' },
+        urls: [makeFile('2024-02-01T00:00:00Z')],  // after cutoff
+      };
+      expect(proxy.filterMetadata(data, CUTOFF)).toBeNull();
+    });
+
+    it('returns data unchanged when urls are before cutoff', () => {
+      const data = {
+        info: { name: 'pkg', version: '1.0.0' },
+        urls: [makeFile('2024-01-01T00:00:00Z')],  // before cutoff
+      };
+      expect(proxy.filterMetadata(data, CUTOFF)).toBe(data);
+    });
+
+    it('uses the earliest url upload time when multiple files', () => {
+      const data = {
+        info: { name: 'pkg', version: '1.0.0' },
+        urls: [
+          makeFile('2024-01-10T00:00:00Z'),  // before cutoff
+          makeFile('2024-01-20T00:00:00Z'),  // after cutoff
+        ],
+      };
+      // earliest is before cutoff -> allowed
+      expect(proxy.filterMetadata(data, CUTOFF)).toBe(data);
+    });
   });
 
   it('filters out versions published after cutoff date', () => {
