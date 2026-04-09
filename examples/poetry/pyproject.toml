@@ -1,0 +1,12 @@
+[project]
+name = "example"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "requests",
+]
+
+[[tool.poetry.source]]
+name = "tengen"
+url = "http://localhost:3000/pypi/simple"
+priority = "primary"
