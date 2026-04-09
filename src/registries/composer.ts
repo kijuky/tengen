@@ -7,18 +7,7 @@ interface ComposerVersion {
   [key: string]: unknown;
 }
 
-interface ComposerV1Package {
-  name: string;
-  versions: Record<string, ComposerVersion>;
-  [key: string]: unknown;
-}
-
-interface ComposerV1Response {
-  package: ComposerV1Package;
-  [key: string]: unknown;
-}
-
-interface ComposerV2Response {
+interface ComposerPackagesResponse {
   packages: Record<string, ComposerVersion[]>;
   [key: string]: unknown;
 }
@@ -29,15 +18,13 @@ export class ComposerRegistryProxy extends RegistryProxy {
   /**
    * Routes requests:
    *   /packages.json                     → registry root (URL rewrite)
-   *   /packages/{vendor}/{package}.json  → v1 API metadata (filtered)
-   *   /p2/{vendor}/{package}.json        → v2 API metadata (filtered)
-   *   /p2/{vendor}/{package}~dev.json    → v2 API metadata (filtered)
+   *   /p2/{vendor}/{package}.json        → metadata (filtered)
+   *   /p2/{vendor}/{package}~dev.json    → metadata (filtered)
    *   everything else                    → passthrough
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
     const isMetadata =
       req.path === "/packages.json" ||
-      (req.path.startsWith("/packages/") && req.path.endsWith(".json")) ||
       (req.path.startsWith("/p2/") && req.path.endsWith(".json"));
 
     if (isMetadata) {
@@ -47,16 +34,17 @@ export class ComposerRegistryProxy extends RegistryProxy {
     }
   }
 
-  private async handleMetadataRequest(req: Request, res: Response): Promise<void> {
+  private async handleMetadataRequest(
+    req: Request,
+    res: Response,
+  ): Promise<void> {
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    await this.handleFilteredJson(
-      res,
-      this.buildUpstreamUrl(req),
-      (data) => this.filterMetadata(data, cutoffDate),
+    await this.handleFilteredJson(res, this.buildUpstreamUrl(req), (data) =>
+      this.filterMetadata(data, cutoffDate),
     );
   }
 
-  filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
+  private filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
     const obj = data as Record<string, unknown>;
 
     // Registry root (packages.json): rewrite URL fields so Composer resolves
@@ -65,18 +53,13 @@ export class ComposerRegistryProxy extends RegistryProxy {
       return this.rewriteRootPackages(obj);
     }
 
-    // v2 API: { packages: { "vendor/pkg": [...versions] } }
+    // packages API: { packages: { "vendor/pkg": [...versions] } }
     if (
       obj.packages != null &&
       typeof obj.packages === "object" &&
       !Array.isArray(obj.packages)
     ) {
-      return this.filterV2(obj as ComposerV2Response, cutoffDate);
-    }
-
-    // v1 API: { package: { name, versions: { "1.0.0": {...} } } }
-    if (obj.package != null && typeof obj.package === "object") {
-      return this.filterV1(obj as ComposerV1Response, cutoffDate);
+      return this.filterPackages(obj as ComposerPackagesResponse, cutoffDate);
     }
 
     return data;
@@ -127,45 +110,32 @@ export class ComposerRegistryProxy extends RegistryProxy {
     return result;
   }
 
-  private filterV1(data: ComposerV1Response, cutoffDate: Date): unknown | null {
-    const { versions, ...restPkg } = data.package;
-    const filteredVersions: Record<string, ComposerVersion> = {};
-
-    for (const [versionKey, version] of Object.entries(versions)) {
-      if (!version.time || new Date(version.time) <= cutoffDate) {
-        filteredVersions[versionKey] = version;
-      }
-    }
-
-    if (Object.keys(filteredVersions).length === 0) return null;
-
-    return { ...data, package: { ...restPkg, versions: filteredVersions } };
-  }
-
   /**
-   * Expand the minified diff-chain format used by Packagist v2.
-   * Each entry only stores fields that changed from the previous entry;
-   * expanding merges them so every entry has the full field set.
+   * Propagate `time` through Packagist's minified diff-chain format.
+   * Each entry only stores fields that changed from the previous entry, so
+   * entries without `time` inherit the last seen value.
    */
-  private expandMinified(versions: ComposerVersion[]): ComposerVersion[] {
-    const result: ComposerVersion[] = [];
-    let base: ComposerVersion = {} as ComposerVersion;
-    for (const v of versions) {
-      base = { ...base, ...v };
-      result.push(base);
-    }
-    return result;
+  private propagateTime(versions: ComposerVersion[]): ComposerVersion[] {
+    let lastTime: string | undefined;
+    return versions.map((v) => {
+      if (v.time !== undefined) lastTime = v.time;
+      return lastTime !== undefined && v.time === undefined
+        ? { ...v, time: lastTime }
+        : v;
+    });
   }
 
-  private filterV2(data: ComposerV2Response, cutoffDate: Date): unknown | null {
+  private filterPackages(
+    data: ComposerPackagesResponse,
+    cutoffDate: Date,
+  ): unknown | null {
     const raw = data as Record<string, unknown>;
-    const isMinified = raw["minified"] === "composer/2.0";
     const filteredPackages: Record<string, ComposerVersion[]> = {};
 
     for (const [pkgName, versions] of Object.entries(data.packages)) {
-      const expanded = isMinified ? this.expandMinified(versions) : versions;
+      const expanded = this.propagateTime(versions);
       const filtered = expanded.filter(
-        (v) => !v.time || new Date(v.time) <= cutoffDate,
+        (v) => v.time && new Date(v.time) <= cutoffDate,
       );
       if (filtered.length > 0) {
         filteredPackages[pkgName] = filtered;
@@ -174,8 +144,6 @@ export class ComposerRegistryProxy extends RegistryProxy {
 
     if (Object.keys(filteredPackages).length === 0) return null;
 
-    // Strip 'minified' since the packages are now fully expanded
-    const { minified: _minified, ...rest } = raw;
-    return { ...rest, packages: filteredPackages };
+    return { ...raw, packages: filteredPackages };
   }
 }
