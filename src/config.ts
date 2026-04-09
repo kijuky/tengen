@@ -1,6 +1,8 @@
 import { parseArgs as nodeParseArgs } from "node:util";
 
 export interface Config {
+  /** Host address to bind on */
+  host: string;
   /** Port to listen on */
   port: number;
   /** Upstream registry base URLs per package manager */
@@ -17,6 +19,12 @@ export interface Config {
 }
 
 const OPTIONS = {
+  host: {
+    type: "string" as const,
+    short: "h",
+    default: "127.0.0.1",
+    description: "Host address to bind on",
+  },
   port: {
     type: "string" as const,
     short: "p",
@@ -61,7 +69,6 @@ const OPTIONS = {
   },
   help: {
     type: "boolean" as const,
-    short: "h",
     description: "Show this help message",
   },
 };
@@ -89,6 +96,7 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
   }
 
   return {
+    host: values["host"] as string,
     port: parseInt(values["port"] as string, 10),
     upstreams: {
       npm: values["npm-upstream"] as string,
