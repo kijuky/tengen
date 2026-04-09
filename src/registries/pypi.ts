@@ -51,35 +51,20 @@ export class PypiRegistryProxy extends RegistryProxy {
   readonly name = "pypi";
 
   /**
-   * Metadata paths:
-   *   /pypi/{name}/json           (JSON API, package-level)
-   *   /pypi/{name}/{version}/json (JSON API, version-specific)
-   * Simple API paths (/pypi/{name}/) are intercepted in handleRequest.
-   * Everything else (e.g. /packages/...) is a binary artifact.
+   * Routes requests:
+   *   /simple/{name}/             → Simple API (HTML or JSON)
+   *   /pypi/{name}/json           → JSON API metadata (package-level)
+   *   /pypi/{name}/{version}/json → JSON API metadata (version-specific)
+   *   everything else             → binary artifact passthrough
    */
-  isMetadataPath(path: string): boolean {
-    return path.endsWith("/json");
-  }
-
-  /**
-   * Intercept Simple API paths: /simple/{name}/ (with or without trailing slash).
-   * pip uses this when the index URL is .../simple/{name}/ (e.g. local testing).
-   * We fetch JSON Simple API from upstream (/simple/{name}/) to obtain upload-time,
-   * filter it, then return HTML or JSON based on what the client requested.
-   */
-  async handleRequest(req: Request, res: Response): Promise<void> {
+  override async handleRequest(req: Request, res: Response): Promise<void> {
     const simpleMatch = req.path.match(/^\/simple\/([^/]+)\/?$/);
     if (simpleMatch) {
-      const cutoffDate = new Date(Date.now() - this.config.delayMs);
-      try {
-        await this.handleSimpleApiRequest(req, res, simpleMatch[1], cutoffDate);
-      } catch (err) {
-        if (!res.headersSent) {
-          res.status(502).json({ error: "Bad Gateway", message: String(err) });
-        }
-      }
+      await this.handleSimpleApiRequest(req, res, simpleMatch[1]);
+    } else if (req.path.endsWith("/json")) {
+      await this.handleJsonApiRequest(req, res);
     } else {
-      await super.handleRequest(req, res);
+      await this.handlePassthrough(req, res);
     }
   }
 
@@ -87,8 +72,8 @@ export class PypiRegistryProxy extends RegistryProxy {
     req: Request,
     res: Response,
     packageName: string,
-    cutoffDate: Date,
   ): Promise<void> {
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
     const upstreamBase = new URL(this.config.upstream);
     // PyPI Simple API lives under /simple/, not /pypi/
     const upstreamUrl = `${upstreamBase.origin}/simple/${packageName}/`;
@@ -136,6 +121,15 @@ export class PypiRegistryProxy extends RegistryProxy {
         .setHeader("content-type", "text/html")
         .send(this.toSimpleApiHtml(filtered));
     }
+  }
+
+  private async handleJsonApiRequest(req: Request, res: Response): Promise<void> {
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+    await this.handleFilteredJson(
+      res,
+      this.buildUpstreamUrl(req),
+      (data) => this.filterMetadata(data, cutoffDate),
+    );
   }
 
   private toSimpleApiHtml(data: SimpleApiMetadata): string {

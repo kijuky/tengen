@@ -1,3 +1,4 @@
+import type { Request, Response } from "express";
 import { RegistryProxy } from "./base.ts";
 
 interface ComposerVersion {
@@ -26,17 +27,32 @@ export class ComposerRegistryProxy extends RegistryProxy {
   readonly name = "composer";
 
   /**
-   * Metadata paths:
-   *   /packages.json                     (registry root — contains metadata-url)
-   *   /packages/{vendor}/{package}.json  (v1 API)
-   *   /p2/{vendor}/{package}.json        (v2 API)
-   *   /p2/{vendor}/{package}~dev.json    (v2 API, dev versions)
+   * Routes requests:
+   *   /packages.json                     → registry root (URL rewrite)
+   *   /packages/{vendor}/{package}.json  → v1 API metadata (filtered)
+   *   /p2/{vendor}/{package}.json        → v2 API metadata (filtered)
+   *   /p2/{vendor}/{package}~dev.json    → v2 API metadata (filtered)
+   *   everything else                    → passthrough
    */
-  isMetadataPath(path: string): boolean {
-    return (
-      path === "/packages.json" ||
-      (path.startsWith("/packages/") && path.endsWith(".json")) ||
-      (path.startsWith("/p2/") && path.endsWith(".json"))
+  override async handleRequest(req: Request, res: Response): Promise<void> {
+    const isMetadata =
+      req.path === "/packages.json" ||
+      (req.path.startsWith("/packages/") && req.path.endsWith(".json")) ||
+      (req.path.startsWith("/p2/") && req.path.endsWith(".json"));
+
+    if (isMetadata) {
+      await this.handleMetadataRequest(req, res);
+    } else {
+      await this.handlePassthrough(req, res);
+    }
+  }
+
+  private async handleMetadataRequest(req: Request, res: Response): Promise<void> {
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+    await this.handleFilteredJson(
+      res,
+      this.buildUpstreamUrl(req),
+      (data) => this.filterMetadata(data, cutoffDate),
     );
   }
 

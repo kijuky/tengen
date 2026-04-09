@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MavenRegistryProxy, parseMavenPath, filterMavenMetadataXml } from './maven.ts';
-
-const proxy = new MavenRegistryProxy({
-  upstream: 'https://repo1.maven.org/maven2',
-  delayMs: 7 * 24 * 60 * 60 * 1000,
-});
-
-const CUTOFF = new Date('2024-01-15T00:00:00Z');
+import { parseMavenPath, filterMavenMetadataXml } from './maven.ts';
 
 function makeXml(versions: string[], release = '', latest = ''): string {
   const versionTags = versions.map((v) => `    <version>${v}</version>`).join('\n');
@@ -25,18 +18,6 @@ ${versionTags}
 </metadata>`;
 }
 
-describe('MavenRegistryProxy.isMetadataPath', () => {
-  it('returns true for maven-metadata.xml paths', () => {
-    expect(proxy.isMetadataPath('/com/example/mylib/maven-metadata.xml')).toBe(true);
-    expect(proxy.isMetadataPath('/org/springframework/spring-core/maven-metadata.xml')).toBe(true);
-  });
-
-  it('returns false for artifact paths', () => {
-    expect(proxy.isMetadataPath('/com/example/mylib/1.0.0/mylib-1.0.0.jar')).toBe(false);
-    expect(proxy.isMetadataPath('/com/example/mylib/1.0.0/mylib-1.0.0.pom')).toBe(false);
-    expect(proxy.isMetadataPath('/com/example/mylib/1.0.0/mylib-1.0.0.jar.sha1')).toBe(false);
-  });
-});
 
 describe('parseMavenPath', () => {
   it('parses groupId and artifactId from path', () => {

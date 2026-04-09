@@ -12,19 +12,6 @@ function makeVersion(number: string, createdAt: string): Record<string, unknown>
   return { number, created_at: createdAt, authors: 'test' };
 }
 
-describe('RubygemsRegistryProxy.isMetadataPath', () => {
-  it('returns true for versions API paths', () => {
-    expect(proxy.isMetadataPath('/api/v1/versions/rails.json')).toBe(true);
-    expect(proxy.isMetadataPath('/api/v1/versions/my-gem.json')).toBe(true);
-  });
-
-  it('returns false for binary artifact paths', () => {
-    expect(proxy.isMetadataPath('/gems/rails-7.1.2.gem')).toBe(false);
-    expect(proxy.isMetadataPath('/quick/Marshal.4.8/rails-7.1.2.gemspec.rz')).toBe(false);
-    expect(proxy.isMetadataPath('/api/v1/gems/rails.json')).toBe(false);
-  });
-});
-
 describe('RubygemsRegistryProxy.filterMetadata', () => {
   it('returns data unchanged when it is not an array', () => {
     const data = { name: 'rails' };

@@ -14,9 +14,8 @@ export interface RegistryConfig {
 /**
  * Base class for registry proxies.
  *
- * To add a new registry (e.g. PyPI, RubyGems), extend this class and implement:
- *   - isMetadataPath(path): return true if the request is for package metadata
- *   - filterMetadata(data, cutoffDate): filter out versions newer than cutoffDate
+ * To add a new registry (e.g. PyPI, RubyGems), extend this class and override
+ * handleRequest(req, res) to implement registry-specific routing and filtering.
  */
 export abstract class RegistryProxy {
   protected readonly config: RegistryConfig;
@@ -28,56 +27,34 @@ export abstract class RegistryProxy {
   /** The human-readable name of this registry (e.g. "npm", "pypi") */
   abstract readonly name: string;
 
-  /**
-   * Returns true if this request path is for package metadata (JSON),
-   * as opposed to binary artifacts (tarballs, wheels, gems, etc.).
-   */
-  abstract isMetadataPath(path: string): boolean;
-
-  /**
-   * Filter the upstream metadata, removing any versions released
-   * after cutoffDate.  Must not mutate the original object.
-   * Returns null when all versions are filtered out (treat as 404).
-   */
-  abstract filterMetadata(data: unknown, cutoffDate: Date): unknown | null;
-
-  /** Entry point called by the Express router for every incoming request. */
-  async handleRequest(req: Request, res: Response): Promise<void> {
-    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+  /** Build the full upstream URL from an incoming request. */
+  protected buildUpstreamUrl(req: Request): string {
     const upstreamBase = new URL(this.config.upstream);
     const reqUrl = new URL(req.url, upstreamBase);
-    const upstreamUrl = `${upstreamBase.origin}${reqUrl.pathname}${reqUrl.search}`;
-
-    try {
-      if (this.isMetadataPath(req.path)) {
-        await this.handleMetadataRequest(req, res, upstreamUrl, cutoffDate);
-      } else {
-        await this.handlePassthrough(req, res, upstreamUrl);
-      }
-    } catch (err) {
-      if (!res.headersSent) {
-        res.status(502).json({ error: "Bad Gateway", message: String(err) });
-      }
-    }
+    return `${upstreamBase.origin}${reqUrl.pathname}${reqUrl.search}`;
   }
 
-  private async handleMetadataRequest(
-    req: Request,
+  /** Entry point called by the Express router for every incoming request. */
+  abstract handleRequest(req: Request, res: Response): Promise<void>;
+
+  /**
+   * Fetch JSON from upstreamUrl, apply filter, and write the response.
+   * Handles non-200 upstream status and null filter result (→ 404) automatically.
+   */
+  protected async handleFilteredJson(
     res: Response,
     upstreamUrl: string,
-    cutoffDate: Date,
+    filter: (data: unknown) => unknown | null,
   ): Promise<void> {
     const response = await axios.get<unknown>(upstreamUrl, {
       validateStatus: () => true,
       maxRedirects: 0,
     });
-
     if (response.status !== 200) {
       res.status(response.status).json(response.data);
       return;
     }
-
-    const filtered = this.filterMetadata(response.data, cutoffDate);
+    const filtered = filter(response.data);
     if (filtered === null) {
       res.status(404).json({ error: "Not found" });
       return;
@@ -85,11 +62,11 @@ export abstract class RegistryProxy {
     res.status(200).json(filtered);
   }
 
-  private async handlePassthrough(
+  protected async handlePassthrough(
     req: Request,
     res: Response,
-    upstreamUrl: string,
   ): Promise<void> {
+    const upstreamUrl = this.buildUpstreamUrl(req);
     const response = await axios.get<NodeJS.ReadableStream>(upstreamUrl, {
       responseType: "stream",
       validateStatus: () => true,

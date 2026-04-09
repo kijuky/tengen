@@ -8,19 +8,6 @@ const proxy = new NpmRegistryProxy({
 
 const CUTOFF = new Date('2024-01-15T00:00:00Z');
 
-describe('NpmRegistryProxy.isMetadataPath', () => {
-  it('returns true for package metadata paths', () => {
-    expect(proxy.isMetadataPath('/lodash')).toBe(true);
-    expect(proxy.isMetadataPath('/@scope/pkg')).toBe(true);
-    expect(proxy.isMetadataPath('/lodash/4.17.21')).toBe(true);
-  });
-
-  it('returns false for tarball paths containing /-/', () => {
-    expect(proxy.isMetadataPath('/lodash/-/lodash-4.17.21.tgz')).toBe(false);
-    expect(proxy.isMetadataPath('/@scope/pkg/-/pkg-1.0.0.tgz')).toBe(false);
-  });
-});
-
 describe('NpmRegistryProxy.filterMetadata', () => {
   it('returns data unchanged when versions field is missing', () => {
     const data = { name: 'pkg', 'dist-tags': { latest: '1.0.0' } };

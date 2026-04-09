@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 import { RegistryProxy } from './base.ts';
 
 interface NpmPackageMetadata {
@@ -17,8 +18,21 @@ export class NpmRegistryProxy extends RegistryProxy {
    *                       or  /@scope/pkg/-/pkg-1.0.0.tgz
    * Everything else is treated as metadata.
    */
-  isMetadataPath(path: string): boolean {
-    return !path.includes('/-/');
+  override async handleRequest(req: Request, res: Response): Promise<void> {
+    if (!req.path.includes('/-/')) {
+      await this.handleMetadataRequest(req, res);
+    } else {
+      await this.handlePassthrough(req, res);
+    }
+  }
+
+  private async handleMetadataRequest(req: Request, res: Response): Promise<void> {
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+    await this.handleFilteredJson(
+      res,
+      this.buildUpstreamUrl(req),
+      (data) => this.filterMetadata(data, cutoffDate),
+    );
   }
 
   filterMetadata(data: unknown, cutoffDate: Date): unknown | null {

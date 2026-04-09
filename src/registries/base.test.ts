@@ -13,12 +13,23 @@ const mockedGet = vi.mocked(axios.get);
 class TestProxy extends RegistryProxy {
   readonly name = 'test';
 
-  isMetadataPath(path: string): boolean {
-    return !path.includes('/tarball/');
-  }
-
-  filterMetadata(data: unknown, _cutoffDate: Date): unknown {
-    return data;
+  override async handleRequest(req: Request, res: Response): Promise<void> {
+    const upstreamBase = new URL(this.config.upstream);
+    const reqUrl = new URL(req.url, upstreamBase);
+    const upstreamUrl = `${upstreamBase.origin}${reqUrl.pathname}${reqUrl.search}`;
+    try {
+      if (!req.path.includes('/tarball/')) {
+        const response = await axios.get<unknown>(upstreamUrl, { validateStatus: () => true, maxRedirects: 0 });
+        if (response.status !== 200) { res.status(response.status).json(response.data); return; }
+        res.status(200).json(response.data);
+      } else {
+        await this.handlePassthrough(req, res);
+      }
+    } catch (err) {
+      if (!res.headersSent) {
+        res.status(502).json({ error: 'Bad Gateway', message: String(err) });
+      }
+    }
   }
 }
 

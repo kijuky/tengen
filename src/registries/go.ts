@@ -10,45 +10,42 @@ interface GoVersionInfo {
 export class GoRegistryProxy extends RegistryProxy {
   readonly name = 'go';
 
-  /**
-   * Metadata paths:
-   *   /{module}/@v/{version}.info  — version timestamp metadata
-   *
-   * /@v/list and /@latest are handled separately in handleRequest.
-   * Binary artifacts (/@v/{version}.mod, /@v/{version}.zip) are passed through.
-   */
-  isMetadataPath(path: string): boolean {
-    return path.endsWith('.info');
-  }
-
   filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
     const info = data as GoVersionInfo;
     if (!info.Time) return data;
     return new Date(info.Time) <= cutoffDate ? info : null;
   }
 
+  /**
+   * Routes requests:
+   *   /@v/list   → filtered version list
+   *   /@latest   → latest allowed version info
+   *   /@v/*.info → version timestamp metadata (filtered)
+   *   everything else → passthrough (/.mod, /.zip, etc.)
+   */
   override async handleRequest(req: Request, res: Response): Promise<void> {
     if (req.path.endsWith('/@v/list')) {
-      try {
-        await this.handleList(req.path, res);
-      } catch (err) {
-        if (!res.headersSent) {
-          res.status(502).json({ error: 'Bad Gateway', message: String(err) });
-        }
-      }
+      await this.handleList(req.path, res);
       return;
     }
     if (req.path.endsWith('/@latest')) {
-      try {
-        await this.handleLatest(req.path, res);
-      } catch (err) {
-        if (!res.headersSent) {
-          res.status(502).json({ error: 'Bad Gateway', message: String(err) });
-        }
-      }
+      await this.handleLatest(req.path, res);
       return;
     }
-    await super.handleRequest(req, res);
+    if (req.path.endsWith('.info')) {
+      await this.handleVersionInfoRequest(req, res);
+      return;
+    }
+    await this.handlePassthrough(req, res);
+  }
+
+  private async handleVersionInfoRequest(req: Request, res: Response): Promise<void> {
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+    await this.handleFilteredJson(
+      res,
+      this.buildUpstreamUrl(req),
+      (data) => this.filterMetadata(data, cutoffDate),
+    );
   }
 
   private upstreamOrigin(): string {

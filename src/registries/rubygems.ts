@@ -11,19 +11,6 @@ interface RubyGemVersion {
 export class RubygemsRegistryProxy extends RegistryProxy {
   readonly name = 'rubygems';
 
-  /**
-   * Metadata paths handled via JSON API:
-   *   /api/v1/versions/{name}.json
-   *
-   * Compact Index paths handled separately in handleRequest:
-   *   /info/{name}
-   *
-   * Binary artifacts (/gems/*, /quick/*) are passed through.
-   */
-  isMetadataPath(path: string): boolean {
-    return path.startsWith('/api/v1/versions/') && path.endsWith('.json');
-  }
-
   filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
     if (!Array.isArray(data)) {
       return data;
@@ -37,18 +24,31 @@ export class RubygemsRegistryProxy extends RegistryProxy {
     return filtered.length === 0 ? null : filtered;
   }
 
+  /**
+   * Routes requests:
+   *   /info/{name}                       → Compact Index (filtered text)
+   *   /api/v1/versions/{name}.json       → JSON versions API (filtered)
+   *   everything else (/gems/*, /quick/) → passthrough
+   */
   override async handleRequest(req: Request, res: Response): Promise<void> {
     if (req.path.startsWith('/info/')) {
-      try {
-        await this.handleCompactInfoRequest(req.path, res);
-      } catch (err) {
-        if (!res.headersSent) {
-          res.status(502).json({ error: 'Bad Gateway', message: String(err) });
-        }
-      }
+      await this.handleCompactInfoRequest(req.path, res);
       return;
     }
-    await super.handleRequest(req, res);
+    if (req.path.startsWith('/api/v1/versions/') && req.path.endsWith('.json')) {
+      await this.handleVersionsJsonRequest(req, res);
+      return;
+    }
+    await this.handlePassthrough(req, res);
+  }
+
+  private async handleVersionsJsonRequest(req: Request, res: Response): Promise<void> {
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+    await this.handleFilteredJson(
+      res,
+      this.buildUpstreamUrl(req),
+      (data) => this.filterMetadata(data, cutoffDate),
+    );
   }
 
   private async handleCompactInfoRequest(

@@ -16,26 +16,6 @@ function makeV2Version(version: string, time: string): Record<string, unknown> {
   return { version, version_normalized: version + '.0', time };
 }
 
-describe('ComposerRegistryProxy.isMetadataPath', () => {
-  it('returns true for the registry root', () => {
-    expect(proxy.isMetadataPath('/packages.json')).toBe(true);
-  });
-
-  it('returns true for v1 packages API paths', () => {
-    expect(proxy.isMetadataPath('/packages/symfony/console.json')).toBe(true);
-    expect(proxy.isMetadataPath('/packages/laravel/framework.json')).toBe(true);
-  });
-
-  it('returns true for v2 p2 API paths', () => {
-    expect(proxy.isMetadataPath('/p2/symfony/console.json')).toBe(true);
-    expect(proxy.isMetadataPath('/p2/symfony/console~dev.json')).toBe(true);
-  });
-
-  it('returns false for non-metadata paths', () => {
-    expect(proxy.isMetadataPath('/p/providers-latest.json')).toBe(false);
-  });
-});
-
 describe('ComposerRegistryProxy.filterMetadata (packages.json)', () => {
   it('rewrites all absolute URLs to relative paths', () => {
     const data = {

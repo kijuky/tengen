@@ -12,18 +12,6 @@ function makeFile(uploadTime: string): Record<string, unknown> {
   return { upload_time_iso_8601: uploadTime, filename: 'pkg.tar.gz' };
 }
 
-describe('PypiRegistryProxy.isMetadataPath', () => {
-  it('returns true for JSON metadata paths', () => {
-    expect(proxy.isMetadataPath('/pypi/requests/json')).toBe(true);
-    expect(proxy.isMetadataPath('/pypi/requests/2.31.0/json')).toBe(true);
-  });
-
-  it('returns false for Simple API and binary artifact paths', () => {
-    expect(proxy.isMetadataPath('/pypi/requests/')).toBe(false);
-    expect(proxy.isMetadataPath('/packages/ab/cd/requests-2.31.0.tar.gz')).toBe(false);
-  });
-});
-
 describe('PypiRegistryProxy.filterMetadata', () => {
   it('returns data unchanged when releases and urls are missing', () => {
     const data = { info: { name: 'pkg', version: '1.0.0' } };

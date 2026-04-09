@@ -19,33 +19,16 @@ export class MavenRegistryProxy extends RegistryProxy {
   readonly name = 'maven';
 
   /**
-   * Metadata paths:
-   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml
-   *
-   * Everything else (JARs, POMs, sources, checksums, etc.) is passed through.
+   * Routes requests:
+   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml → filtered XML metadata
+   *   everything else (JARs, POMs, sources, checksums)   → passthrough
    */
-  isMetadataPath(path: string): boolean {
-    return path.endsWith('/maven-metadata.xml');
-  }
-
-  filterMetadata(data: unknown, _cutoffDate: Date): unknown | null {
-    // Maven metadata is XML and requires a separate timestamp lookup via the
-    // Maven Central Search API. Filtering happens in handleRequest instead.
-    return data;
-  }
-
   override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (this.isMetadataPath(req.path)) {
-      try {
-        await this.handleMavenMetadataRequest(req.path, res);
-      } catch (err) {
-        if (!res.headersSent) {
-          res.status(502).json({ error: 'Bad Gateway', message: String(err) });
-        }
-      }
+    if (req.path.endsWith('/maven-metadata.xml')) {
+      await this.handleMavenMetadataRequest(req.path, res);
       return;
     }
-    await super.handleRequest(req, res);
+    await this.handlePassthrough(req, res);
   }
 
   private async handleMavenMetadataRequest(
