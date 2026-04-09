@@ -1,0 +1,3 @@
+[[index]]
+url = "http://localhost:3000/pypi/simple"
+default = true
