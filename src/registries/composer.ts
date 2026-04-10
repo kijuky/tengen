@@ -1,5 +1,5 @@
-import type { Request, Response } from "express";
-import { RegistryProxy } from "./base.ts";
+import type { Request, Response } from 'express';
+import { RegistryProxy } from './base.ts';
 
 interface ComposerVersion {
   version: string;
@@ -13,7 +13,7 @@ interface ComposerPackagesResponse {
 }
 
 export class ComposerRegistryProxy extends RegistryProxy {
-  readonly name = "composer";
+  readonly name = 'composer';
 
   /**
    * Routes requests:
@@ -24,8 +24,8 @@ export class ComposerRegistryProxy extends RegistryProxy {
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
     const isMetadata =
-      req.path === "/packages.json" ||
-      (req.path.startsWith("/p2/") && req.path.endsWith(".json"));
+      req.path === '/packages.json' ||
+      (req.path.startsWith('/p2/') && req.path.endsWith('.json'));
 
     if (isMetadata) {
       await this.handleMetadataRequest(req, res);
@@ -49,14 +49,14 @@ export class ComposerRegistryProxy extends RegistryProxy {
 
     // Registry root (packages.json): rewrite URL fields so Composer resolves
     // them relative to the proxy instead of going directly to the upstream.
-    if (typeof obj["metadata-url"] === "string") {
+    if (typeof obj['metadata-url'] === 'string') {
       return this.rewriteRootPackages(obj);
     }
 
     // packages API: { packages: { "vendor/pkg": [...versions] } }
     if (
       obj.packages != null &&
-      typeof obj.packages === "object" &&
+      typeof obj.packages === 'object' &&
       !Array.isArray(obj.packages)
     ) {
       return filterComposerPackages(
@@ -75,38 +75,38 @@ export class ComposerRegistryProxy extends RegistryProxy {
   private toRelativePath(url: string): string {
     try {
       const parsed = new URL(url);
-      return "/" + this.name + parsed.pathname + parsed.search;
+      return '/' + this.name + parsed.pathname + parsed.search;
     } catch {
-      return "/" + this.name + url; // already relative
+      return '/' + this.name + url; // already relative
     }
   }
 
   private rewriteRootPackages(data: Record<string, unknown>): unknown {
     const result = { ...data };
     const topLevelUrlFields = [
-      "metadata-url",
-      "providers-url",
-      "metadata-changes-url",
-      "notify-batch",
-      "search",
-      "list",
-      "providers-api",
+      'metadata-url',
+      'providers-url',
+      'metadata-changes-url',
+      'notify-batch',
+      'search',
+      'list',
+      'providers-api',
     ];
     for (const key of topLevelUrlFields) {
-      if (typeof result[key] === "string") {
+      if (typeof result[key] === 'string') {
         result[key] = this.toRelativePath(result[key] as string);
       }
     }
     // Rewrite nested URL fields
     if (
-      result["security-advisories"] != null &&
-      typeof result["security-advisories"] === "object"
+      result['security-advisories'] != null &&
+      typeof result['security-advisories'] === 'object'
     ) {
-      const sa = result["security-advisories"] as Record<string, unknown>;
-      if (typeof sa["api-url"] === "string") {
-        result["security-advisories"] = {
+      const sa = result['security-advisories'] as Record<string, unknown>;
+      if (typeof sa['api-url'] === 'string') {
+        result['security-advisories'] = {
           ...sa,
-          "api-url": this.toRelativePath(sa["api-url"]),
+          'api-url': this.toRelativePath(sa['api-url']),
         };
       }
     }
@@ -115,17 +115,40 @@ export class ComposerRegistryProxy extends RegistryProxy {
 }
 
 /**
- * Propagate `time` through Packagist's minified diff-chain format.
+ * Expand Packagist's minified diff-chain format.
  * Each entry only stores fields that changed from the previous entry, so
- * entries without `time` inherit the last seen value.
+ * missing fields are inherited from the accumulated state of prior entries.
  */
-function propagateTime(versions: ComposerVersion[]): ComposerVersion[] {
-  let lastTime: string | undefined;
+function expandVersions(versions: ComposerVersion[]): ComposerVersion[] {
+  let accumulated: ComposerVersion = { version: '' };
   return versions.map((v) => {
-    if (v.time !== undefined) lastTime = v.time;
-    return lastTime !== undefined && v.time === undefined
-      ? { ...v, time: lastTime }
-      : v;
+    accumulated = { ...accumulated, ...v };
+    return { ...accumulated };
+  });
+}
+
+/**
+ * Re-minify expanded versions back to diff-chain format by stripping fields
+ * that are identical to the previous entry.  The first entry is kept as-is.
+ */
+function minifyVersions(versions: ComposerVersion[]): ComposerVersion[] {
+  let prev: ComposerVersion | undefined;
+  return versions.map((v) => {
+    if (prev === undefined) {
+      prev = v;
+      return { ...v };
+    }
+    const diff: ComposerVersion = { version: v.version };
+    for (const key of Object.keys(v) as (keyof ComposerVersion)[]) {
+      if (
+        key !== 'version' &&
+        JSON.stringify(v[key]) !== JSON.stringify(prev[key])
+      ) {
+        diff[key] = v[key];
+      }
+    }
+    prev = v;
+    return diff;
   });
 }
 
@@ -137,12 +160,12 @@ function filterComposerPackages(
   const filteredPackages: Record<string, ComposerVersion[]> = {};
 
   for (const [pkgName, versions] of Object.entries(data.packages)) {
-    const expanded = propagateTime(versions);
+    const expanded = expandVersions(versions);
     const filtered = expanded.filter(
-      (v) => v.time && new Date(v.time) <= cutoffDate,
+      (v: ComposerVersion) => v.time && new Date(v.time) <= cutoffDate,
     );
     if (filtered.length > 0) {
-      filteredPackages[pkgName] = filtered;
+      filteredPackages[pkgName] = minifyVersions(filtered);
     }
   }
 
