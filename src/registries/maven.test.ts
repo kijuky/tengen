@@ -1,21 +1,21 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createHash } from 'node:crypto';
-import { MavenRegistryProxy, parseMavenPath } from './maven.ts';
-import { makeReq, makeRes } from './test-helpers.ts';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
+import { MavenRegistryProxy, parseMavenPath } from "./maven.ts";
+import { makeReq, makeRes } from "./test-helpers.ts";
 
-vi.mock('axios', () => ({
+vi.mock("axios", () => ({
   default: { get: vi.fn() },
 }));
 
-import axios from 'axios';
+import axios from "axios";
 
 const DELAY_MS = 7 * 24 * 60 * 60 * 1000;
-const CUTOFF = new Date('2024-01-15T00:00:00Z');
+const CUTOFF = new Date("2024-01-15T00:00:00Z");
 const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 
-const BEFORE_CUTOFF = new Date('2024-01-01T00:00:00Z').getTime();
+const BEFORE_CUTOFF = new Date("2024-01-01T00:00:00Z").getTime();
 const AT_CUTOFF = CUTOFF.getTime();
-const AFTER_CUTOFF = new Date('2024-02-01T00:00:00Z').getTime();
+const AFTER_CUTOFF = new Date("2024-02-01T00:00:00Z").getTime();
 
 type SearchDoc = { v: string; timestamp: number };
 
@@ -26,7 +26,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   proxy = new MavenRegistryProxy({
-    upstream: 'https://repo1.maven.org/maven2',
+    upstream: "https://repo1.maven.org/maven2",
     delayMs: DELAY_MS,
   });
 });
@@ -35,15 +35,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function makeXml(versions: string[], release = '', latest = ''): string {
-  const versionTags = versions.map((v) => `    <version>${v}</version>`).join('\n');
+function makeXml(versions: string[], release = "", latest = ""): string {
+  const versionTags = versions
+    .map((v) => `    <version>${v}</version>`)
+    .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <metadata>
   <groupId>com.example</groupId>
   <artifactId>mylib</artifactId>
   <versioning>
-    <latest>${latest || versions[versions.length - 1] || ''}</latest>
-    <release>${release || versions[versions.length - 1] || ''}</release>
+    <latest>${latest || versions[versions.length - 1] || ""}</latest>
+    <release>${release || versions[versions.length - 1] || ""}</release>
     <versions>
 ${versionTags}
     </versions>
@@ -73,120 +75,133 @@ async function handle(
   return res;
 }
 
-describe('parseMavenPath', () => {
-  it('parses groupId and artifactId from path', () => {
-    expect(parseMavenPath('/com/example/mylib/maven-metadata.xml')).toEqual({
-      groupId: 'com.example',
-      artifactId: 'mylib',
+describe("parseMavenPath", () => {
+  it("parses groupId and artifactId from path", () => {
+    expect(parseMavenPath("/com/example/mylib/maven-metadata.xml")).toEqual({
+      groupId: "com.example",
+      artifactId: "mylib",
     });
   });
 
-  it('handles deeply nested groupIds', () => {
-    expect(parseMavenPath('/org/springframework/boot/spring-boot/maven-metadata.xml')).toEqual({
-      groupId: 'org.springframework.boot',
-      artifactId: 'spring-boot',
+  it("handles deeply nested groupIds", () => {
+    expect(
+      parseMavenPath(
+        "/org/springframework/boot/spring-boot/maven-metadata.xml",
+      ),
+    ).toEqual({
+      groupId: "org.springframework.boot",
+      artifactId: "spring-boot",
     });
   });
 });
 
-describe('MavenRegistryProxy – routing', () => {
-  it('streams JARs and POMs as passthrough', async () => {
+describe("MavenRegistryProxy – routing", () => {
+  it("streams JARs and POMs as passthrough", async () => {
     const mockStream = { pipe: vi.fn() };
-    vi.mocked(axios.get).mockResolvedValueOnce({ status: 200, data: mockStream, headers: {} });
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 200,
+      data: mockStream,
+      headers: {},
+    });
     const res = makeRes();
-    await proxy.handleRequest(makeReq('/com/example/mylib/1.0.0/mylib-1.0.0.jar'), res);
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
+      res,
+    );
     expect(mockStream.pipe).toHaveBeenCalledWith(res);
   });
 
-  it('responds to maven-metadata.xml with XML content-type (not streamed)', async () => {
-    const xml = makeXml(['1.0.0']);
-    const res = await handle(
-      '/com/example/mylib/maven-metadata.xml',
-      xml,
-      [{ v: '1.0.0', timestamp: BEFORE_CUTOFF }],
-    );
-    expect(res.type).toHaveBeenCalledWith('application/xml');
+  it("responds to maven-metadata.xml with XML content-type (not streamed)", async () => {
+    const xml = makeXml(["1.0.0"]);
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { v: "1.0.0", timestamp: BEFORE_CUTOFF },
+    ]);
+    expect(res.type).toHaveBeenCalledWith("application/xml");
     expect(res.send).toHaveBeenCalled();
   });
 });
 
-describe('MavenRegistryProxy – metadata filtering', () => {
-  it('removes versions published after the cutoff', async () => {
-    const xml = makeXml(['1.0.0', '2.0.0']);
-    const res = await handle(
-      '/com/example/mylib/maven-metadata.xml',
-      xml,
-      [
-        { v: '1.0.0', timestamp: BEFORE_CUTOFF },  // allowed
-        { v: '2.0.0', timestamp: AFTER_CUTOFF },   // filtered
-      ],
-    );
+describe("MavenRegistryProxy – metadata filtering", () => {
+  it("removes versions published after the cutoff", async () => {
+    const xml = makeXml(["1.0.0", "2.0.0"]);
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { v: "1.0.0", timestamp: BEFORE_CUTOFF }, // allowed
+      { v: "2.0.0", timestamp: AFTER_CUTOFF }, // filtered
+    ]);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
-    expect(body).toContain('<version>1.0.0</version>');
-    expect(body).not.toContain('<version>2.0.0</version>');
+    expect(body).toContain("<version>1.0.0</version>");
+    expect(body).not.toContain("<version>2.0.0</version>");
   });
 
-  it('includes versions published exactly at the cutoff', async () => {
-    const xml = makeXml(['1.0.0']);
-    const res = await handle(
-      '/com/example/mylib/maven-metadata.xml',
-      xml,
-      [{ v: '1.0.0', timestamp: AT_CUTOFF }],
-    );
+  it("includes versions published exactly at the cutoff", async () => {
+    const xml = makeXml(["1.0.0"]);
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { v: "1.0.0", timestamp: AT_CUTOFF },
+    ]);
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
-    expect(body).toContain('<version>1.0.0</version>');
+    expect(body).toContain("<version>1.0.0</version>");
   });
 
-  it('updates <release> and <latest> to the latest allowed version', async () => {
-    const xml = makeXml(['1.0.0', '1.1.0', '2.0.0'], '2.0.0', '2.0.0');
-    const res = await handle(
-      '/com/example/mylib/maven-metadata.xml',
-      xml,
-      [
-        { v: '1.0.0', timestamp: BEFORE_CUTOFF },
-        { v: '1.1.0', timestamp: BEFORE_CUTOFF + 1000 },  // newest allowed
-        { v: '2.0.0', timestamp: AFTER_CUTOFF },
-      ],
-    );
+  it("updates <release> and <latest> to the latest allowed version", async () => {
+    const xml = makeXml(["1.0.0", "1.1.0", "2.0.0"], "2.0.0", "2.0.0");
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { v: "1.0.0", timestamp: BEFORE_CUTOFF },
+      { v: "1.1.0", timestamp: BEFORE_CUTOFF + 1000 }, // newest allowed
+      { v: "2.0.0", timestamp: AFTER_CUTOFF },
+    ]);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
-    expect(body).toContain('<release>1.1.0</release>');
-    expect(body).toContain('<latest>1.1.0</latest>');
+    expect(body).toContain("<release>1.1.0</release>");
+    expect(body).toContain("<latest>1.1.0</latest>");
   });
 
-  it('returns 404 when all versions are filtered out', async () => {
-    const xml = makeXml(['2.0.0']);
-    const res = await handle(
-      '/com/example/mylib/maven-metadata.xml',
-      xml,
-      [{ v: '2.0.0', timestamp: AFTER_CUTOFF }],
-    );
+  it("returns 404 when all versions are filtered out", async () => {
+    const xml = makeXml(["2.0.0"]);
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { v: "2.0.0", timestamp: AFTER_CUTOFF },
+    ]);
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
-  it('proxies upstream non-200 status without calling the search API', async () => {
-    const res = await handle('/com/example/mylib/maven-metadata.xml', '', [], 404);
+  it("proxies upstream non-200 status without calling the search API", async () => {
+    const res = await handle(
+      "/com/example/mylib/maven-metadata.xml",
+      "",
+      [],
+      404,
+    );
     expect(res.status).toHaveBeenCalledWith(404);
     expect(vi.mocked(axios.get)).toHaveBeenCalledTimes(1);
   });
 
-  it('returns 502 when the Maven search API fails', async () => {
+  it("returns 502 when the Maven search API fails", async () => {
     vi.mocked(axios.get)
-      .mockResolvedValueOnce({ status: 200, data: makeXml(['1.0.0']), headers: {} })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: makeXml(["1.0.0"]),
+        headers: {},
+      })
       .mockResolvedValueOnce({ status: 503, data: {}, headers: {} });
     const res = makeRes();
-    await proxy.handleRequest(makeReq('/com/example/mylib/maven-metadata.xml'), res);
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/maven-metadata.xml"),
+      res,
+    );
     expect(res.status).toHaveBeenCalledWith(502);
   });
 
-  it('passes through group-level metadata (no <versions> block) without calling the search API', async () => {
+  it("passes through group-level metadata (no <versions> block) without calling the search API", async () => {
     const groupXml = `<?xml version="1.0" encoding="UTF-8"?>
 <metadata>
   <plugins><plugin><name>MyPlugin</name></plugin></plugins>
 </metadata>`;
-    vi.mocked(axios.get).mockResolvedValueOnce({ status: 200, data: groupXml, headers: {} });
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 200,
+      data: groupXml,
+      headers: {},
+    });
     const res = makeRes();
-    await proxy.handleRequest(makeReq('/com/example/maven-metadata.xml'), res);
+    await proxy.handleRequest(makeReq("/com/example/maven-metadata.xml"), res);
     expect(vi.mocked(axios.get)).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
@@ -194,39 +209,37 @@ describe('MavenRegistryProxy – metadata filtering', () => {
   });
 });
 
-describe('MavenRegistryProxy – checksum endpoints', () => {
-  it('returns SHA1 of the filtered XML for .sha1 path', async () => {
-    const xml = makeXml(['1.0.0']);
-    const expected = createHash('sha1').update(xml).digest('hex');
+describe("MavenRegistryProxy – checksum endpoints", () => {
+  it("returns SHA1 of the filtered XML for .sha1 path", async () => {
+    const xml = makeXml(["1.0.0"]);
+    const expected = createHash("sha1").update(xml).digest("hex");
     const res = await handle(
-      '/com/example/mylib/maven-metadata.xml.sha1',
+      "/com/example/mylib/maven-metadata.xml.sha1",
       xml,
-      [{ v: '1.0.0', timestamp: BEFORE_CUTOFF }],
+      [{ v: "1.0.0", timestamp: BEFORE_CUTOFF }],
     );
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).toBe(expected);
   });
 
-  it('returns MD5 of the filtered XML for .md5 path', async () => {
-    const xml = makeXml(['1.0.0']);
-    const expected = createHash('md5').update(xml).digest('hex');
-    const res = await handle(
-      '/com/example/mylib/maven-metadata.xml.md5',
-      xml,
-      [{ v: '1.0.0', timestamp: BEFORE_CUTOFF }],
-    );
+  it("returns MD5 of the filtered XML for .md5 path", async () => {
+    const xml = makeXml(["1.0.0"]);
+    const expected = createHash("md5").update(xml).digest("hex");
+    const res = await handle("/com/example/mylib/maven-metadata.xml.md5", xml, [
+      { v: "1.0.0", timestamp: BEFORE_CUTOFF },
+    ]);
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).toBe(expected);
   });
 
-  it('returns 404 for .sha1 when all versions are filtered out', async () => {
-    const xml = makeXml(['2.0.0']);
+  it("returns 404 for .sha1 when all versions are filtered out", async () => {
+    const xml = makeXml(["2.0.0"]);
     const res = await handle(
-      '/com/example/mylib/maven-metadata.xml.sha1',
+      "/com/example/mylib/maven-metadata.xml.sha1",
       xml,
-      [{ v: '2.0.0', timestamp: AFTER_CUTOFF }],
+      [{ v: "2.0.0", timestamp: AFTER_CUTOFF }],
     );
     expect(res.status).toHaveBeenCalledWith(404);
   });

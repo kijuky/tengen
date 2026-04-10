@@ -1,7 +1,7 @@
-import type { Request, Response } from 'express';
-import axios from 'axios';
-import escapeHtml from 'escape-html';
-import { RegistryProxy } from './base.ts';
+import type { Request, Response } from "express";
+import axios from "axios";
+import escapeHtml from "escape-html";
+import { RegistryProxy } from "./base.ts";
 
 interface PyPiFile {
   upload_time_iso_8601: string;
@@ -24,13 +24,13 @@ interface SimpleApiFile {
   filename: string;
   url: string;
   hashes: Record<string, string>;
-  'upload-time'?: string;
-  'requires-python'?: string;
+  "upload-time"?: string;
+  "requires-python"?: string;
   [key: string]: unknown;
 }
 
 interface SimpleApiMetadata {
-  meta: { 'api-version': string };
+  meta: { "api-version": string };
   name: string;
   files: SimpleApiFile[];
   versions?: string[];
@@ -43,12 +43,12 @@ interface SimpleApiMetadata {
  * sdist:  {name}-{version}.tar.gz | .zip | .tar.bz2
  */
 function extractVersion(filename: string): string {
-  const withoutExt = filename.replace(/\.(whl|tar\.gz|tar\.bz2|tgz|zip)$/, '');
-  return withoutExt.split('-')[1] ?? '';
+  const withoutExt = filename.replace(/\.(whl|tar\.gz|tar\.bz2|tgz|zip)$/, "");
+  return withoutExt.split("-")[1] ?? "";
 }
 
 export class PypiRegistryProxy extends RegistryProxy {
-  readonly name = 'pypi';
+  readonly name = "pypi";
 
   /**
    * Routes requests:
@@ -61,7 +61,7 @@ export class PypiRegistryProxy extends RegistryProxy {
     const simpleMatch = req.path.match(/^\/simple\/([^/]+)\/?$/);
     if (simpleMatch) {
       await this.handleSimpleApiRequest(req, res, simpleMatch[1]);
-    } else if (req.path.endsWith('/json')) {
+    } else if (req.path.endsWith("/json")) {
       await this.handleJsonApiRequest(req, res);
     } else {
       await this.handlePassthrough(req, res);
@@ -82,7 +82,7 @@ export class PypiRegistryProxy extends RegistryProxy {
     const response = await axios.get<SimpleApiMetadata>(upstreamUrl, {
       validateStatus: () => true,
       maxRedirects: 0,
-      headers: { Accept: 'application/vnd.pypi.simple.v1+json' },
+      headers: { Accept: "application/vnd.pypi.simple.v1+json" },
     });
 
     if (response.status !== 200) {
@@ -92,12 +92,12 @@ export class PypiRegistryProxy extends RegistryProxy {
 
     const data = response.data;
     const filteredFiles = data.files.filter((file) => {
-      if (!file['upload-time']) return true;
-      return new Date(file['upload-time']) <= cutoffDate;
+      if (!file["upload-time"]) return true;
+      return new Date(file["upload-time"]) <= cutoffDate;
     });
 
     if (filteredFiles.length === 0 && data.files.length > 0) {
-      res.status(404).json({ error: 'Not found' });
+      res.status(404).json({ error: "Not found" });
       return;
     }
 
@@ -114,15 +114,15 @@ export class PypiRegistryProxy extends RegistryProxy {
       ...(filteredVersions !== undefined && { versions: filteredVersions }),
     };
 
-    if (req.headers.accept?.includes('application/vnd.pypi.simple.v1+json')) {
+    if (req.headers.accept?.includes("application/vnd.pypi.simple.v1+json")) {
       res
         .status(200)
-        .setHeader('content-type', 'application/vnd.pypi.simple.v1+json')
+        .setHeader("content-type", "application/vnd.pypi.simple.v1+json")
         .json(filtered);
     } else {
       res
         .status(200)
-        .setHeader('content-type', 'text/html')
+        .setHeader("content-type", "text/html")
         .send(toSimpleApiHtml(filtered));
     }
   }
@@ -141,24 +141,24 @@ export class PypiRegistryProxy extends RegistryProxy {
 function toSimpleApiHtml(data: SimpleApiMetadata): string {
   const links = data.files
     .map((file) => {
-      const requiresPython = file['requires-python']
-        ? ` data-requires-python="${escapeHtml(file['requires-python'])}"`
-        : '';
+      const requiresPython = file["requires-python"]
+        ? ` data-requires-python="${escapeHtml(file["requires-python"])}"`
+        : "";
       return `    <a href="${file.url}"${requiresPython}>${file.filename}</a><br />`;
     })
-    .join('\n');
+    .join("\n");
   return [
-    '<!DOCTYPE html>',
+    "<!DOCTYPE html>",
     '<html lang="en">',
-    '  <head>',
+    "  <head>",
     `    <title>Links for ${data.name}</title>`,
-    '  </head>',
-    '  <body>',
+    "  </head>",
+    "  <body>",
     `    <h1>Links for ${data.name}</h1>`,
     links,
-    '  </body>',
-    '</html>',
-  ].join('\n');
+    "  </body>",
+    "</html>",
+  ].join("\n");
 }
 
 function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
@@ -196,7 +196,7 @@ function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
   }
 
   // Find the latest allowed version by upload time
-  let latestVersion = '';
+  let latestVersion = "";
   let latestTime = new Date(0);
   for (const [version, files] of Object.entries(filteredReleases)) {
     if (files.length === 0) continue;

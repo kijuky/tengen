@@ -20,7 +20,11 @@ const proxy = new ComposerRegistryProxy({
 
 const handle = makeHandle(proxy, vi.mocked(axios.get));
 
-function makeVersion(version: string, versionNormalized: string, time: string): Record<string, unknown> {
+function makeVersion(
+  version: string,
+  versionNormalized: string,
+  time: string,
+): Record<string, unknown> {
   return { version, version_normalized: versionNormalized, time };
 }
 beforeEach(() => {
@@ -133,7 +137,9 @@ describe("ComposerRegistryProxy – package metadata filtering", () => {
   it("includes versions published exactly at the cutoff date", async () => {
     const data = {
       packages: {
-        "symfony/console": [makeVersion("6.0.0", "6.0.0.0", "2024-01-15T00:00:00Z")],
+        "symfony/console": [
+          makeVersion("6.0.0", "6.0.0.0", "2024-01-15T00:00:00Z"),
+        ],
       },
     };
     const res = await handle("/p2/symfony/console.json", data);

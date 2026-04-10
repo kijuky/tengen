@@ -1,6 +1,6 @@
-import type { Request, Response } from 'express';
-import axios from 'axios';
-import { RegistryProxy } from './base.ts';
+import type { Request, Response } from "express";
+import axios from "axios";
+import { RegistryProxy } from "./base.ts";
 
 interface GoVersionInfo {
   Version: string;
@@ -8,7 +8,7 @@ interface GoVersionInfo {
 }
 
 export class GoRegistryProxy extends RegistryProxy {
-  readonly name = 'go';
+  readonly name = "go";
 
   /**
    * Routes requests:
@@ -18,27 +18,28 @@ export class GoRegistryProxy extends RegistryProxy {
    *   everything else → passthrough (/.mod, /.zip, etc.)
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (req.path.endsWith('/@v/list')) {
+    if (req.path.endsWith("/@v/list")) {
       await this.handleList(req.path, res);
       return;
     }
-    if (req.path.endsWith('/@latest')) {
+    if (req.path.endsWith("/@latest")) {
       await this.handleLatest(req.path, res);
       return;
     }
-    if (req.path.endsWith('.info')) {
+    if (req.path.endsWith(".info")) {
       await this.handleVersionInfoRequest(req, res);
       return;
     }
     await this.handlePassthrough(req, res);
   }
 
-  private async handleVersionInfoRequest(req: Request, res: Response): Promise<void> {
+  private async handleVersionInfoRequest(
+    req: Request,
+    res: Response,
+  ): Promise<void> {
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    await this.handleFilteredJson(
-      res,
-      this.buildUpstreamUrl(req),
-      (data) => filterGoMetadata(data, cutoffDate),
+    await this.handleFilteredJson(res, this.buildUpstreamUrl(req), (data) =>
+      filterGoMetadata(data, cutoffDate),
     );
   }
 
@@ -51,7 +52,7 @@ export class GoRegistryProxy extends RegistryProxy {
     const origin = this.upstreamOrigin();
 
     const listRes = await axios.get<string>(`${origin}${path}`, {
-      responseType: 'text',
+      responseType: "text",
       validateStatus: () => true,
       maxRedirects: 0,
     });
@@ -61,8 +62,8 @@ export class GoRegistryProxy extends RegistryProxy {
       return;
     }
 
-    const versions = listRes.data.split('\n').filter((v) => v.trim());
-    const modulePath = path.slice(0, path.length - '/@v/list'.length);
+    const versions = listRes.data.split("\n").filter((v) => v.trim());
+    const modulePath = path.slice(0, path.length - "/@v/list".length);
 
     const results = await Promise.all(
       versions.map(async (version) => {
@@ -74,11 +75,14 @@ export class GoRegistryProxy extends RegistryProxy {
 
     const allowed = results.filter((v): v is string => v !== null);
     if (allowed.length === 0) {
-      res.status(404).send('not found');
+      res.status(404).send("not found");
       return;
     }
 
-    res.status(200).type('text/plain').send(allowed.join('\n') + '\n');
+    res
+      .status(200)
+      .type("text/plain")
+      .send(allowed.join("\n") + "\n");
   }
 
   private async handleLatest(path: string, res: Response): Promise<void> {
@@ -102,18 +106,19 @@ export class GoRegistryProxy extends RegistryProxy {
     }
 
     // Latest upstream version is too new — find the most recent allowed version
-    const modulePath = path.slice(0, path.length - '/@latest'.length);
-    const listRes = await axios.get<string>(
-      `${origin}${modulePath}/@v/list`,
-      { responseType: 'text', validateStatus: () => true, maxRedirects: 0 },
-    );
+    const modulePath = path.slice(0, path.length - "/@latest".length);
+    const listRes = await axios.get<string>(`${origin}${modulePath}/@v/list`, {
+      responseType: "text",
+      validateStatus: () => true,
+      maxRedirects: 0,
+    });
 
     if (listRes.status !== 200) {
-      res.status(404).json({ error: 'Not found' });
+      res.status(404).json({ error: "Not found" });
       return;
     }
 
-    const versions = listRes.data.split('\n').filter((v) => v.trim());
+    const versions = listRes.data.split("\n").filter((v) => v.trim());
     const infos = await Promise.all(
       versions.map(async (version) => {
         const info = await fetchGoInfo(origin, modulePath, version);
@@ -130,7 +135,7 @@ export class GoRegistryProxy extends RegistryProxy {
       .sort((a, b) => b.time.getTime() - a.time.getTime());
 
     if (allowed.length === 0) {
-      res.status(404).json({ error: 'Not found' });
+      res.status(404).json({ error: "Not found" });
       return;
     }
 

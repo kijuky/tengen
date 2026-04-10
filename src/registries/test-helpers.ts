@@ -5,7 +5,11 @@ export function makeHandle(
   proxy: { handleRequest: HandleRequest },
   mockAxiosGet: MockAxiosGet,
 ) {
-  return async (path: string, data: unknown, status = 200): Promise<Response> => {
+  return async (
+    path: string,
+    data: unknown,
+    status = 200,
+  ): Promise<Response> => {
     mockAxiosGet.mockResolvedValue({ status, data, headers: {} });
     const res = makeRes();
     await proxy.handleRequest(makeReq(path), res);

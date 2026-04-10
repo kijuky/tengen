@@ -1,6 +1,6 @@
-import type { Request, Response } from 'express';
-import axios from 'axios';
-import { RegistryProxy } from './base.ts';
+import type { Request, Response } from "express";
+import axios from "axios";
+import { RegistryProxy } from "./base.ts";
 
 interface RubyGemVersion {
   number: string;
@@ -20,7 +20,7 @@ function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
 }
 
 export class RubygemsRegistryProxy extends RegistryProxy {
-  readonly name = 'rubygems';
+  readonly name = "rubygems";
 
   /**
    * Routes requests:
@@ -29,13 +29,13 @@ export class RubygemsRegistryProxy extends RegistryProxy {
    *   everything else (/gems/*, /quick/) → passthrough
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (req.path.startsWith('/info/')) {
+    if (req.path.startsWith("/info/")) {
       await this.handleCompactInfoRequest(req.path, res);
       return;
     }
     if (
-      req.path.startsWith('/api/v1/versions/') &&
-      req.path.endsWith('.json')
+      req.path.startsWith("/api/v1/versions/") &&
+      req.path.endsWith(".json")
     ) {
       await this.handleVersionsJsonRequest(req, res);
       return;
@@ -59,12 +59,12 @@ export class RubygemsRegistryProxy extends RegistryProxy {
   ): Promise<void> {
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
     const upstreamBase = new URL(this.config.upstream);
-    const gemName = path.slice('/info/'.length);
+    const gemName = path.slice("/info/".length);
 
     // Fetch compact index text and JSON API timestamps in parallel
     const [infoRes, versionsRes] = await Promise.all([
       axios.get<string>(`${upstreamBase.origin}/info/${gemName}`, {
-        responseType: 'text',
+        responseType: "text",
         validateStatus: () => true,
         maxRedirects: 0,
       }),
@@ -82,7 +82,7 @@ export class RubygemsRegistryProxy extends RegistryProxy {
     // If we can't get timestamps, treat the gem as not found
     if (versionsRes.status !== 200 || !Array.isArray(versionsRes.data)) {
       res.status(versionsRes.status === 404 ? 404 : 502).json({
-        error: versionsRes.status === 404 ? 'Not found' : 'Bad Gateway',
+        error: versionsRes.status === 404 ? "Not found" : "Bad Gateway",
       });
       return;
     }
@@ -95,11 +95,11 @@ export class RubygemsRegistryProxy extends RegistryProxy {
 
     const filtered = filterCompactInfo(infoRes.data, allowedVersions);
     if (filtered === null) {
-      res.status(404).json({ error: 'Not found' });
+      res.status(404).json({ error: "Not found" });
       return;
     }
 
-    res.status(200).type('text/plain').send(filtered);
+    res.status(200).type("text/plain").send(filtered);
   }
 }
 
@@ -117,8 +117,8 @@ function filterCompactInfo(
   text: string,
   allowedVersions: Set<string>,
 ): string | null {
-  const lines = text.split('\n');
-  const separatorIdx = lines.indexOf('---');
+  const lines = text.split("\n");
+  const separatorIdx = lines.indexOf("---");
   if (separatorIdx === -1) {
     // Unknown format — pass through unchanged
     return text;
@@ -130,12 +130,12 @@ function filterCompactInfo(
   const filteredVersionLines = versionLines.filter((line) => {
     const trimmed = line.trim();
     if (!trimmed) return true; // preserve blank lines
-    const version = trimmed.split(' ')[0];
+    const version = trimmed.split(" ")[0];
     return allowedVersions.has(version);
   });
 
   const hasVersions = filteredVersionLines.some((l) => l.trim().length > 0);
   if (!hasVersions) return null;
 
-  return [...header, ...filteredVersionLines].join('\n');
+  return [...header, ...filteredVersionLines].join("\n");
 }

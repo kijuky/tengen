@@ -112,5 +112,4 @@ describe("loadConfig", () => {
     expect(consoleSpy).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
-
 });

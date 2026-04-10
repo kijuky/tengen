@@ -59,7 +59,10 @@ export class ComposerRegistryProxy extends RegistryProxy {
       typeof obj.packages === "object" &&
       !Array.isArray(obj.packages)
     ) {
-      return filterComposerPackages(obj as ComposerPackagesResponse, cutoffDate);
+      return filterComposerPackages(
+        obj as ComposerPackagesResponse,
+        cutoffDate,
+      );
     }
 
     return data;

@@ -29,12 +29,15 @@ export function createServer(config: Config): express.Express {
       res.on("finish", () => {
         const ms = Date.now() - start;
         console.log(
-          `[${registry.name}] ${req.method} ${req.path} -> ${res.statusCode} (${ms}ms)`
+          `[${registry.name}] ${req.method} ${req.path} -> ${res.statusCode} (${ms}ms)`,
         );
       });
 
       registry.handleRequest(req, res).catch((err) => {
-        console.error(`[${registry.name}] ${req.method} ${req.path} error:`, err);
+        console.error(
+          `[${registry.name}] ${req.method} ${req.path} error:`,
+          err,
+        );
         if (!res.headersSent) {
           res
             .status(500)

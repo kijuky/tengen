@@ -1,9 +1,9 @@
-import type { Request, Response } from 'express';
-import { RegistryProxy } from './base.ts';
+import type { Request, Response } from "express";
+import { RegistryProxy } from "./base.ts";
 
 interface NpmPackageMetadata {
   name: string;
-  'dist-tags': Record<string, string>;
+  "dist-tags": Record<string, string>;
   versions: Record<string, unknown>;
   /** Keys: version strings + "created" + "modified" */
   time: Record<string, string>;
@@ -11,7 +11,7 @@ interface NpmPackageMetadata {
 }
 
 export class NpmRegistryProxy extends RegistryProxy {
-  readonly name = 'npm';
+  readonly name = "npm";
 
   /**
    * Tarball paths look like:  /lodash/-/lodash-4.17.21.tgz
@@ -19,7 +19,7 @@ export class NpmRegistryProxy extends RegistryProxy {
    * Everything else is treated as metadata.
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (!req.path.includes('/-/')) {
+    if (!req.path.includes("/-/")) {
       await this.handleMetadataRequest(req, res);
     } else {
       await this.handlePassthrough(req, res);
@@ -72,7 +72,7 @@ function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
   // Collect versions that were published before the cutoff
   const allowedVersions = new Set<string>();
   for (const [key, publishedAt] of Object.entries(pkg.time)) {
-    if (key === 'created' || key === 'modified') continue;
+    if (key === "created" || key === "modified") continue;
     if (new Date(publishedAt) <= cutoffDate) {
       allowedVersions.add(key);
     }
@@ -94,7 +94,7 @@ function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
   // Filter time object (keep special keys)
   const filteredTime: Record<string, string> = {};
   for (const [key, value] of Object.entries(pkg.time)) {
-    if (key === 'created' || key === 'modified' || allowedVersions.has(key)) {
+    if (key === "created" || key === "modified" || allowedVersions.has(key)) {
       filteredTime[key] = value;
     }
   }
@@ -102,7 +102,7 @@ function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
   // Update dist-tags: if a tag points to a filtered version,
   // fall back to the most recently published allowed version.
   const filteredDistTags = filterDistTags(
-    pkg['dist-tags'],
+    pkg["dist-tags"],
     allowedVersions,
     pkg.time,
   );
@@ -111,6 +111,6 @@ function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
     ...pkg,
     versions: filteredVersions,
     time: filteredTime,
-    'dist-tags': filteredDistTags,
+    "dist-tags": filteredDistTags,
   };
 }
