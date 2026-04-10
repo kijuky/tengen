@@ -1,6 +1,7 @@
-import type { Request, Response } from 'express';
-import axios from 'axios';
-import { RegistryProxy } from './base.ts';
+import type { Request, Response } from "express";
+import axios from "axios";
+import { createHash } from "node:crypto";
+import { RegistryProxy } from "./base.ts";
 
 interface MavenSearchDoc {
   v: string;
@@ -16,62 +17,107 @@ interface MavenSearchResponse {
 }
 
 export class MavenRegistryProxy extends RegistryProxy {
-  readonly name = 'maven';
+  readonly name = "maven";
+
+  private readonly metadataCache = new Map<
+    string,
+    { value: string; expiresAt: number }
+  >();
+  private static readonly CACHE_TTL_MS = 120_000;
 
   /**
    * Routes requests:
-   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml → filtered XML metadata
-   *   everything else (JARs, POMs, sources, checksums)   → passthrough
+   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml        → filtered XML metadata
+   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml.sha1  → SHA1 of filtered XML
+   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml.md5   → MD5 of filtered XML
+   *   everything else (JARs, POMs, sources, other checksums)    → passthrough
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (req.path.endsWith('/maven-metadata.xml')) {
-      await this.handleMavenMetadataRequest(req.path, res);
+    const path = req.path;
+    const checksumSuffix = path.endsWith("/maven-metadata.xml.sha1")
+      ? "sha1"
+      : path.endsWith("/maven-metadata.xml.md5")
+        ? "md5"
+        : null;
+    const isMetadata = path.endsWith("/maven-metadata.xml");
+
+    if (!isMetadata && checksumSuffix === null) {
+      await this.handlePassthrough(req, res);
       return;
     }
-    await this.handlePassthrough(req, res);
+
+    const xmlPath = checksumSuffix
+      ? path.slice(0, -(checksumSuffix.length + 1))
+      : path;
+
+    const filtered = await this.buildFilteredMetadata(xmlPath, res);
+    if (filtered === null) return; // response already written
+
+    if (checksumSuffix) {
+      const hash = createHash(checksumSuffix === "sha1" ? "sha1" : "md5")
+        .update(filtered)
+        .digest("hex");
+      res.status(200).type("text/plain").send(hash);
+    } else {
+      res.status(200).type("application/xml").send(filtered);
+    }
   }
 
-  private async handleMavenMetadataRequest(
+  /**
+   * Fetches upstream maven-metadata.xml and returns a filtered copy,
+   * or writes an error response and returns null.
+   */
+  private async buildFilteredMetadata(
     path: string,
     res: Response,
-  ): Promise<void> {
-    const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    const upstreamBase = new URL(this.config.upstream);
-    const { groupId, artifactId } = parseMavenPath(path);
+  ): Promise<string | null> {
+    const cached = this.metadataCache.get(path);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
 
-    // Fetch maven-metadata.xml and Maven Central Search API timestamps in parallel
-    const [metadataRes, searchRes] = await Promise.all([
-      axios.get<string>(`${upstreamBase.origin}${path}`, {
-        responseType: 'text',
-        validateStatus: () => true,
-        maxRedirects: 0,
-      }),
-      axios.get<MavenSearchResponse>(
-        'https://search.maven.org/solrsearch/select',
-        {
-          params: {
-            q: `g:"${groupId}" AND a:"${artifactId}"`,
-            core: 'gav',
-            rows: 500,
-            wt: 'json',
-          },
-          validateStatus: () => true,
-          maxRedirects: 0,
-        },
-      ),
-    ]);
+    const upstreamBase = new URL(this.config.upstream);
+    const upstreamUrl = `${upstreamBase.href.replace(/\/$/, "")}${path}`;
+
+    const metadataRes = await axios.get<string>(upstreamUrl, {
+      responseType: "text",
+      validateStatus: () => true,
+      maxRedirects: 0,
+    });
 
     if (metadataRes.status !== 200) {
       res.status(metadataRes.status).send(metadataRes.data);
-      return;
+      return null;
     }
+
+    // Group-level metadata lists plugins/artifacts without <versions> — pass through as-is
+    if (!metadataRes.data.includes("<versions>")) {
+      return metadataRes.data;
+    }
+
+    const cutoffDate = new Date(Date.now() - this.config.delayMs);
+    const { groupId, artifactId } = parseMavenPath(path);
+
+    const searchRes = await axios.get<MavenSearchResponse>(
+      "https://search.maven.org/solrsearch/select",
+      {
+        params: {
+          q: `g:"${groupId}" AND a:"${artifactId}"`,
+          core: "gav",
+          rows: 500,
+          wt: "json",
+        },
+        validateStatus: () => true,
+        maxRedirects: 0,
+      },
+    );
 
     if (searchRes.status !== 200 || !searchRes.data?.response?.docs) {
       res.status(502).json({
-        error: 'Bad Gateway',
-        message: 'Failed to fetch version timestamps from Maven Central Search',
+        error: "Bad Gateway",
+        message: "Failed to fetch version timestamps from Maven Central Search",
       });
-      return;
+      return null;
     }
 
     const allowedDocs = searchRes.data.response.docs.filter(
@@ -79,12 +125,11 @@ export class MavenRegistryProxy extends RegistryProxy {
     );
     const allowedVersions = new Set<string>(allowedDocs.map((doc) => doc.v));
 
-    // Determine the latest allowed version by timestamp
     const latestDoc = allowedDocs.reduce<MavenSearchDoc | null>((acc, doc) => {
       if (!acc || doc.timestamp > acc.timestamp) return doc;
       return acc;
     }, null);
-    const latestVersion = latestDoc?.v ?? '';
+    const latestVersion = latestDoc?.v ?? "";
 
     const filtered = filterMavenMetadataXml(
       metadataRes.data,
@@ -92,11 +137,15 @@ export class MavenRegistryProxy extends RegistryProxy {
       latestVersion,
     );
     if (filtered === null) {
-      res.status(404).json({ error: 'Not found' });
-      return;
+      res.status(404).json({ error: "Not found" });
+      return null;
     }
 
-    res.status(200).type('application/xml').send(filtered);
+    this.metadataCache.set(path, {
+      value: filtered,
+      expiresAt: Date.now() + MavenRegistryProxy.CACHE_TTL_MS,
+    });
+    return filtered;
   }
 }
 
@@ -111,10 +160,10 @@ export function parseMavenPath(path: string): {
   groupId: string;
   artifactId: string;
 } {
-  const withoutFile = path.replace(/\/maven-metadata\.xml$/, '');
-  const parts = withoutFile.split('/').filter(Boolean);
-  const artifactId = parts[parts.length - 1] ?? '';
-  const groupId = parts.slice(0, -1).join('.');
+  const withoutFile = path.replace(/\/maven-metadata\.xml$/, "");
+  const parts = withoutFile.split("/").filter(Boolean);
+  const artifactId = parts[parts.length - 1] ?? "";
+  const groupId = parts.slice(0, -1).join(".");
   return { groupId, artifactId };
 }
 
@@ -142,7 +191,7 @@ export function filterMavenMetadataXml(
             hasAllowedVersions = true;
             return match;
           }
-          return '';
+          return "";
         },
       );
       return `${open}${filteredContent}${close}`;

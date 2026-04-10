@@ -29,9 +29,9 @@ export abstract class RegistryProxy {
 
   /** Build the full upstream URL from an incoming request. */
   protected buildUpstreamUrl(req: Request): string {
-    const upstreamBase = new URL(this.config.upstream);
-    const reqUrl = new URL(req.url, upstreamBase);
-    return `${upstreamBase.origin}${reqUrl.pathname}${reqUrl.search}`;
+    const base = this.config.upstream.replace(/\/$/, "");
+    const reqUrl = new URL(req.url, "http://dummy");
+    return `${base}${reqUrl.pathname}${reqUrl.search}`;
   }
 
   /** Entry point called by the Express router for every incoming request. */

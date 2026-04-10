@@ -58,7 +58,7 @@ const OPTIONS = {
   },
   "maven-upstream": {
     type: "string" as const,
-    default: "https://repo1.maven.org/maven2",
+    default: "https://repo.maven.apache.org/maven2",
     description: "Upstream URL for Maven Central",
   },
   "delay-days": {
