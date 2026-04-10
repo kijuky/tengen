@@ -96,19 +96,16 @@ describe("parseMavenPath", () => {
 });
 
 describe("MavenRegistryProxy – routing", () => {
-  it("streams JARs and POMs as passthrough", async () => {
-    const mockStream = { pipe: vi.fn() };
-    vi.mocked(axios.get).mockResolvedValueOnce({
-      status: 200,
-      data: mockStream,
-      headers: {},
-    });
+  it("redirects JARs and POMs as passthrough", async () => {
     const res = makeRes();
     await proxy.handleRequest(
       makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
       res,
     );
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://repo1.maven.org/maven2/com/example/mylib/1.0.0/mylib-1.0.0.jar",
+    );
   });
 
   it("responds to maven-metadata.xml with XML content-type (not streamed)", async () => {

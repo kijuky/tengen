@@ -1,8 +1,5 @@
 import type { Request, Response } from "express";
-import axios, {
-  type AxiosResponseHeaders,
-  type RawAxiosResponseHeaders,
-} from "axios";
+import axios from "axios";
 
 export interface RegistryConfig {
   /** Upstream registry base URL */
@@ -62,31 +59,7 @@ export abstract class RegistryProxy {
     res.status(200).json(filtered);
   }
 
-  protected async handlePassthrough(
-    req: Request,
-    res: Response,
-  ): Promise<void> {
-    const upstreamUrl = this.buildUpstreamUrl(req);
-    const response = await axios.get<NodeJS.ReadableStream>(upstreamUrl, {
-      responseType: "stream",
-      validateStatus: () => true,
-      maxRedirects: 0,
-    });
-
-    res.status(response.status);
-    this.forwardResponseHeaders(response.headers, res);
-    response.data.pipe(res);
-  }
-
-  private forwardResponseHeaders(
-    headers: AxiosResponseHeaders | RawAxiosResponseHeaders,
-    res: Response,
-  ): void {
-    const skip = new Set(["transfer-encoding", "connection", "accept"]);
-    for (const [key, value] of Object.entries(headers)) {
-      if (!skip.has(key.toLowerCase()) && value !== undefined) {
-        res.setHeader(key, value as string | string[]);
-      }
-    }
+  protected handlePassthrough(req: Request, res: Response): void {
+    res.redirect(302, this.buildUpstreamUrl(req));
   }
 }

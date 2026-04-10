@@ -98,52 +98,27 @@ describe("RegistryProxy.handleRequest – metadata requests", () => {
 });
 
 describe("RegistryProxy.handleRequest – passthrough requests", () => {
-  it("streams the tarball response and sets the upstream status", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/pkg/tarball/pkg-1.0.0.tgz", mockStream, 200);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
-  });
-
-  it("forwards upstream response headers, skipping transfer-encoding and connection", async () => {
-    const mockStream = { pipe: vi.fn() };
-    mockedGet.mockResolvedValue({
-      status: 200,
-      data: mockStream,
-      headers: {
-        "content-type": "application/octet-stream",
-        "content-length": "12345",
-        "transfer-encoding": "chunked",
-        connection: "keep-alive",
-      },
-    });
-
+  it("redirects to the upstream URL with 302", async () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), res);
 
-    expect(res.setHeader).toHaveBeenCalledWith(
-      "content-type",
-      "application/octet-stream",
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz",
     );
-    expect(res.setHeader).toHaveBeenCalledWith("content-length", "12345");
-    expect(res.setHeader).not.toHaveBeenCalledWith(
-      "transfer-encoding",
-      expect.anything(),
-    );
-    expect(res.setHeader).not.toHaveBeenCalledWith(
-      "connection",
-      expect.anything(),
-    );
+    expect(mockedGet).not.toHaveBeenCalled();
   });
 
-  it("requests upstream with responseType stream", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/pkg/tarball/pkg-1.0.0.tgz", mockStream);
+  it("preserves query string in redirect URL", async () => {
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/pkg/tarball/pkg-1.0.0.tgz?foo=bar"),
+      res,
+    );
 
-    expect(mockedGet).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ responseType: "stream" }),
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz?foo=bar",
     );
   });
 });

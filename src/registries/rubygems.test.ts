@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("RubygemsRegistryProxy – routing", () => {
-  it("routes /info/{name} to compact info handler (not streamed)", async () => {
+  it("routes /info/{name} to compact info handler (not redirected)", async () => {
     mockedGet
       .mockResolvedValueOnce({
         status: 200,
@@ -51,22 +51,22 @@ describe("RubygemsRegistryProxy – routing", () => {
         data: [makeVersion("1.0.0", "2024-01-01T00:00:00Z")],
         headers: {},
       });
-    const mockStream = { pipe: vi.fn() };
     const res = makeRes();
     await proxy.handleRequest(makeReq("/info/rails"), res);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("routes /api/v1/versions/{name}.json to versions handler (not streamed)", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/api/v1/versions/rails.json", mockStream);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+  it("routes /api/v1/versions/{name}.json to versions handler (not redirected)", async () => {
+    const res = await handle("/api/v1/versions/rails.json", {});
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("streams non-metadata paths as passthrough", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/gems/rails-7.0.0.gem", mockStream);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects non-metadata paths as passthrough", async () => {
+    const res = await handle("/gems/rails-7.0.0.gem", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://rubygems.org/gems/rails-7.0.0.gem",
+    );
   });
 });
 

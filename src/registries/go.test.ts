@@ -197,19 +197,19 @@ describe("GoRegistryProxy.handleRequest - /@latest", () => {
 });
 
 describe("GoRegistryProxy.handleRequest - passthrough", () => {
-  it("streams response for .mod requests", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.mod", mockStream);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects .mod requests", async () => {
+    const res = await handle("/github.com/foo/bar/@v/v1.0.0.mod", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.mod",
+    );
   });
 
-  it("streams response for .zip requests", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.zip", mockStream);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects .zip requests", async () => {
+    const res = await handle("/github.com/foo/bar/@v/v1.0.0.zip", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.zip",
+    );
   });
 });

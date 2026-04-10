@@ -56,16 +56,17 @@ describe("PypiRegistryProxy – routing", () => {
     expect(res.send).toHaveBeenCalled();
   });
 
-  it("routes /pypi/{name}/json to JSON API handler (not streamed)", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/pypi/requests/json", mockStream);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+  it("routes /pypi/{name}/json to JSON API handler (not redirected)", async () => {
+    const res = await handle("/pypi/requests/json", {});
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("streams other paths as passthrough", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/packages/requests-2.28.0.tar.gz", mockStream);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects other paths as passthrough", async () => {
+    const res = await handle("/packages/requests-2.28.0.tar.gz", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://pypi.org/packages/requests-2.28.0.tar.gz",
+    );
   });
 });
 
@@ -354,18 +355,22 @@ describe("PypiRegistryProxy – JSON API version-specific (/pypi/{name}/{version
 });
 
 describe("PypiRegistryProxy – passthrough", () => {
-  it("streams .tar.gz artifact", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/packages/requests-2.28.0.tar.gz", mockStream);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects .tar.gz artifact", async () => {
+    const res = await handle("/packages/requests-2.28.0.tar.gz", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://pypi.org/packages/requests-2.28.0.tar.gz",
+    );
   });
 
-  it("streams .whl artifact", async () => {
-    const mockStream = { pipe: vi.fn() };
+  it("redirects .whl artifact", async () => {
     const res = await handle(
       "/packages/requests-2.28.0-py3-none-any.whl",
-      mockStream,
+      {},
     );
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://pypi.org/packages/requests-2.28.0-py3-none-any.whl",
+    );
   });
 });

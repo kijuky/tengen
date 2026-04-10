@@ -38,28 +38,27 @@ afterEach(() => {
 });
 
 describe("ComposerRegistryProxy – routing", () => {
-  it("routes /packages.json to metadata handler (not streamed)", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/packages.json", mockStream);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+  it("routes /packages.json to metadata handler (not redirected)", async () => {
+    const res = await handle("/packages.json", {});
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("routes /p2/vendor/package.json to metadata handler (not streamed)", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/p2/vendor/package.json", mockStream);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+  it("routes /p2/vendor/package.json to metadata handler (not redirected)", async () => {
+    const res = await handle("/p2/vendor/package.json", {});
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("routes /p2/vendor/package~dev.json to metadata handler (not streamed)", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/p2/vendor/package~dev.json", mockStream);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+  it("routes /p2/vendor/package~dev.json to metadata handler (not redirected)", async () => {
+    const res = await handle("/p2/vendor/package~dev.json", {});
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("streams non-metadata paths as passthrough", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/downloads/vendor/package/1.0.0.zip", mockStream);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects non-metadata paths as passthrough", async () => {
+    const res = await handle("/downloads/vendor/package/1.0.0.zip", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://packagist.org/downloads/vendor/package/1.0.0.zip",
+    );
   });
 });
 

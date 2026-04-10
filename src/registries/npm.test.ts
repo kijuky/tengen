@@ -30,16 +30,17 @@ afterEach(() => {
 });
 
 describe("NpmRegistryProxy – routing", () => {
-  it("routes metadata paths to metadata handler (not streamed)", async () => {
-    const mockStream = { pipe: vi.fn() };
-    await handle("/lodash", mockStream);
-    expect(mockStream.pipe).not.toHaveBeenCalled();
+  it("routes metadata paths to metadata handler (not redirected)", async () => {
+    const res = await handle("/lodash", {});
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("streams tarball paths as passthrough", async () => {
-    const mockStream = { pipe: vi.fn() };
-    const res = await handle("/lodash/-/lodash-4.17.21.tgz", mockStream);
-    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  it("redirects tarball paths as passthrough", async () => {
+    const res = await handle("/lodash/-/lodash-4.17.21.tgz", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+    );
   });
 });
 
