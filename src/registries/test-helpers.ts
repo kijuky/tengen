@@ -23,8 +23,9 @@ type MockAxiosGet = { mockResolvedValue: (val: unknown) => void };
 export function makeReq(
   path: string,
   headers: Record<string, string> = {},
+  method = "GET",
 ): Request {
-  return { path, url: path, headers } as unknown as Request;
+  return { path, url: path, headers, method } as unknown as Request;
 }
 
 export function makeRes(): Response {
@@ -32,6 +33,7 @@ export function makeRes(): Response {
   res.status = vi.fn().mockReturnValue(res);
   res.json = vi.fn().mockReturnValue(res);
   res.send = vi.fn().mockReturnValue(res);
+  res.end = vi.fn().mockReturnValue(res);
   res.type = vi.fn().mockReturnValue(res);
   res.setHeader = vi.fn().mockReturnValue(res);
   res.redirect = vi.fn().mockReturnValue(res);

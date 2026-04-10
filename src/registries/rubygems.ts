@@ -24,11 +24,16 @@ export class RubygemsRegistryProxy extends RegistryProxy {
 
   /**
    * Routes requests:
+   *   /versions                          → Compact Index versions list (proxied, not redirected)
    *   /info/{name}                       → Compact Index (filtered text)
    *   /api/v1/versions/{name}.json       → JSON versions API (filtered)
    *   everything else (/gems/*, /quick/) → passthrough
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
+    if (req.path === "/versions") {
+      await this.handleVersionsFile(req, res);
+      return;
+    }
     if (req.path.startsWith("/info/")) {
       await this.handleCompactInfoRequest(req.path, res);
       return;
@@ -41,6 +46,33 @@ export class RubygemsRegistryProxy extends RegistryProxy {
       return;
     }
     await this.handlePassthrough(req, res);
+  }
+
+  /**
+   * Proxy HEAD/GET /versions to upstream without redirecting.
+   * Redirecting breaks the compact index protocol because Ruby's Net::HTTP
+   * does not automatically follow redirects for HEAD requests, causing clients
+   * to incorrectly conclude that compact index is unsupported.
+   */
+  private async handleVersionsFile(req: Request, res: Response): Promise<void> {
+    const upstreamBase = new URL(this.config.upstream);
+    const response = await axios({
+      method: req.method,
+      url: `${upstreamBase.origin}/versions`,
+      validateStatus: () => true,
+      responseType: "text",
+    });
+
+    res.status(response.status);
+    for (const header of ["content-type", "etag", "last-modified"]) {
+      const value = response.headers[header];
+      if (value !== undefined) res.setHeader(header, value as string);
+    }
+    if (req.method === "HEAD") {
+      res.end();
+    } else {
+      res.send(response.data);
+    }
   }
 
   private async handleVersionsJsonRequest(

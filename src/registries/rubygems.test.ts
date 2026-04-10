@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { RubygemsRegistryProxy } from "./rubygems.ts";
 import { makeHandle, makeReq, makeRes } from "./test-helpers.ts";
 
-vi.mock("axios", () => ({
-  default: { get: vi.fn() },
-}));
+vi.mock("axios", () => {
+  const fn = Object.assign(vi.fn(), { get: vi.fn() });
+  return { default: fn };
+});
 
 import axios from "axios";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockedAxios = axios as any;
 const mockedGet = vi.mocked(axios.get);
 
 // Fix time so that: cutoffDate = Date.now() - delayMs = 2024-01-15T00:00:00Z
@@ -67,6 +70,67 @@ describe("RubygemsRegistryProxy – routing", () => {
       302,
       "https://rubygems.org/gems/rails-7.0.0.gem",
     );
+  });
+
+  it("routes /versions without redirecting (proxied)", async () => {
+    mockedAxios.mockResolvedValue({ status: 200, data: "---\nrails 7.0.0 abc123\n", headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/versions"), res);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+});
+
+describe("RubygemsRegistryProxy – /versions", () => {
+  const VERSIONS_BODY = "---\nrails 7.0.0,7.1.0 abc123\n";
+
+  it("proxies GET /versions and returns body (not a redirect)", async () => {
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: VERSIONS_BODY,
+      headers: { "content-type": "text/plain" },
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/versions"), res);
+    expect(res.redirect).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(vi.mocked(res.send)).toHaveBeenCalledWith(VERSIONS_BODY);
+    expect(vi.mocked(res.end)).not.toHaveBeenCalled();
+  });
+
+  it("proxies HEAD /versions and calls res.end() without body", async () => {
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: "",
+      headers: { etag: '"abc123"' },
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/versions", {}, "HEAD"), res);
+    expect(res.redirect).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(vi.mocked(res.end)).toHaveBeenCalled();
+    expect(vi.mocked(res.send)).not.toHaveBeenCalled();
+  });
+
+  it("forwards ETag and Last-Modified headers", async () => {
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: VERSIONS_BODY,
+      headers: { etag: '"abc"', "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT" },
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/versions"), res);
+    expect(vi.mocked(res.setHeader)).toHaveBeenCalledWith("etag", '"abc"');
+    expect(vi.mocked(res.setHeader)).toHaveBeenCalledWith(
+      "last-modified",
+      "Thu, 01 Jan 2026 00:00:00 GMT",
+    );
+  });
+
+  it("passes through non-200 upstream status", async () => {
+    mockedAxios.mockResolvedValue({ status: 503, data: "", headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/versions"), res);
+    expect(res.status).toHaveBeenCalledWith(503);
   });
 });
 
