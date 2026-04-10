@@ -1,19 +1,66 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ComposerRegistryProxy } from "./composer.ts";
+import { makeHandle, responseBody } from "./test-helpers.ts";
+
+vi.mock("axios", () => ({
+  default: { get: vi.fn() },
+}));
+
+import axios from "axios";
+
+// Fix time so that: cutoffDate = Date.now() - delayMs = 2024-01-15T00:00:00Z
+const DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+const CUTOFF = new Date("2024-01-15T00:00:00Z");
+const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 
 const proxy = new ComposerRegistryProxy({
   upstream: "https://packagist.org",
-  delayMs: 7 * 24 * 60 * 60 * 1000,
+  delayMs: DELAY_MS,
 });
 
-const CUTOFF = new Date("2024-01-15T00:00:00Z");
+const handle = makeHandle(proxy, vi.mocked(axios.get));
 
-function makeV2Version(version: string, time: string): Record<string, unknown> {
-  return { version, version_normalized: version + ".0", time };
+function makeVersion(version: string, versionNormalized: string, time: string): Record<string, unknown> {
+  return { version, version_normalized: versionNormalized, time };
 }
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
 
-describe("ComposerRegistryProxy.filterMetadata (packages.json)", () => {
-  it("rewrites all absolute URLs to relative paths", () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("ComposerRegistryProxy – routing", () => {
+  it("routes /packages.json to metadata handler (not streamed)", async () => {
+    const mockStream = { pipe: vi.fn() };
+    await handle("/packages.json", mockStream);
+    expect(mockStream.pipe).not.toHaveBeenCalled();
+  });
+
+  it("routes /p2/vendor/package.json to metadata handler (not streamed)", async () => {
+    const mockStream = { pipe: vi.fn() };
+    await handle("/p2/vendor/package.json", mockStream);
+    expect(mockStream.pipe).not.toHaveBeenCalled();
+  });
+
+  it("routes /p2/vendor/package~dev.json to metadata handler (not streamed)", async () => {
+    const mockStream = { pipe: vi.fn() };
+    await handle("/p2/vendor/package~dev.json", mockStream);
+    expect(mockStream.pipe).not.toHaveBeenCalled();
+  });
+
+  it("streams non-metadata paths as passthrough", async () => {
+    const mockStream = { pipe: vi.fn() };
+    const res = await handle("/downloads/vendor/package/1.0.0.zip", mockStream);
+    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  });
+});
+
+describe("ComposerRegistryProxy – packages.json URL rewriting", () => {
+  it("rewrites all absolute URLs to proxy-relative paths", async () => {
     const data = {
       "metadata-url": "https://repo.packagist.org/p2/%package%.json",
       "providers-url": "/p/%package%$%hash%.json",
@@ -28,11 +75,10 @@ describe("ComposerRegistryProxy.filterMetadata (packages.json)", () => {
       },
       packages: [],
     };
+    const res = await handle("/packages.json", data);
 
-    const result = proxy.filterMetadata(data, CUTOFF) as Record<
-      string,
-      unknown
-    >;
+    expect(res.status).toHaveBeenCalledWith(200);
+    const result = responseBody(res);
     expect(result["metadata-url"]).toBe("/composer/p2/%package%.json");
     expect(result["providers-url"]).toBe("/composer/p/%package%$%hash%.json");
     expect(result["metadata-changes-url"]).toBe(
@@ -49,82 +95,34 @@ describe("ComposerRegistryProxy.filterMetadata (packages.json)", () => {
     ).toBe("/composer/api/security-advisories/");
   });
 
-  it("rewrites already-relative metadata-url to a proxy-prefixed path", () => {
-    const data = {
-      "metadata-url": "/p2/%package%.json",
-      packages: [],
-    };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as Record<
-      string,
-      unknown
-    >;
+  it("rewrites already-relative metadata-url to a proxy-prefixed path", async () => {
+    const data = { "metadata-url": "/p2/%package%.json", packages: [] };
+    const res = await handle("/packages.json", data);
+    const result = responseBody(res);
     expect(result["metadata-url"]).toBe("/composer/p2/%package%.json");
   });
-});
 
-describe("ComposerRegistryProxy.filterMetadata (unrecognized)", () => {
-  it("returns data unchanged when structure is unrecognized", () => {
+  it("passes through data with unrecognized structure unchanged", async () => {
     const data = { foo: "bar" };
-    expect(proxy.filterMetadata(data, CUTOFF)).toBe(data);
+    const res = await handle("/packages.json", data);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(data);
   });
 });
 
-describe("ComposerRegistryProxy.filterMetadata (v2)", () => {
-  it("filters out versions published after cutoff date", () => {
+describe("ComposerRegistryProxy – package metadata filtering", () => {
+  it("filters out versions published after cutoff date", async () => {
     const data = {
       packages: {
         "symfony/console": [
-          makeV2Version("6.0.0", "2024-01-01T00:00:00Z"), // before -> allowed
-          makeV2Version("6.1.0", "2024-02-01T00:00:00Z"), // after  -> filtered
+          makeVersion("6.0.0", "6.0.0.0", "2024-01-01T00:00:00Z"), // before → allowed
+          makeVersion("6.1.0", "6.1.0.0", "2024-02-01T00:00:00Z"), // after  → filtered
         ],
       },
       minified: "composer/2.0",
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    expect(result.packages["symfony/console"]).toHaveLength(1);
-    expect(result.packages["symfony/console"][0].version).toBe("6.0.0");
-  });
-
-  it("includes versions published exactly at the cutoff date", () => {
-    const data = {
-      packages: {
-        "symfony/console": [makeV2Version("6.0.0", "2024-01-15T00:00:00Z")],
-      },
-    };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    expect(result.packages["symfony/console"]).toHaveLength(1);
-  });
-
-  it("propagates time through minified diff-chain before filtering (newest-first real-world format)", () => {
-    // Packagist v2 minified: newest first, subsequent entries only carry changed fields.
-    // v6.1.0 has time; v6.0.0 inherits it via propagateTime.
-    const data = {
-      packages: {
-        "symfony/console": [
-          // newest first (after cutoff → filtered out); carries time
-          {
-            version: "6.1.0",
-            version_normalized: "6.1.0.0",
-            time: "2024-02-01T00:00:00Z",
-          },
-          // older (before cutoff → kept); has its own time
-          {
-            version: "6.0.0",
-            version_normalized: "6.0.0.0",
-            time: "2024-01-01T00:00:00Z",
-          },
-        ],
-      },
-      minified: "composer/2.0",
-    };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as Record<
-      string,
-      unknown
-    >;
+    const res = await handle("/p2/symfony/console.json", data);
+    const result = responseBody(res);
     const versions = (result["packages"] as Record<string, unknown[]>)[
       "symfony/console"
     ];
@@ -132,30 +130,70 @@ describe("ComposerRegistryProxy.filterMetadata (v2)", () => {
     expect((versions[0] as Record<string, unknown>)["version"]).toBe("6.0.0");
   });
 
-  it("returns null when all versions are filtered out", () => {
+  it("includes versions published exactly at the cutoff date", async () => {
     const data = {
       packages: {
-        "symfony/console": [
-          makeV2Version("6.1.0", "2024-02-01T00:00:00Z"), // after cutoff
-        ],
+        "symfony/console": [makeVersion("6.0.0", "6.0.0.0", "2024-01-15T00:00:00Z")],
       },
     };
-
-    expect(proxy.filterMetadata(data, CUTOFF)).toBeNull();
+    const res = await handle("/p2/symfony/console.json", data);
+    const result = responseBody(res);
+    const versions = (result["packages"] as Record<string, unknown[]>)[
+      "symfony/console"
+    ];
+    expect(versions).toHaveLength(1);
   });
 
-  it("does not mutate the original data", () => {
+  it("propagates time through minified diff-chain before filtering (newest-first real-world format)", async () => {
+    // Packagist minified: newest first, subsequent entries only carry changed fields.
+    // The oldest entry has no `time` field — it must inherit from the entry above it.
     const data = {
       packages: {
         "symfony/console": [
-          makeV2Version("6.0.0", "2024-01-01T00:00:00Z"),
-          makeV2Version("6.1.0", "2024-02-01T00:00:00Z"),
+          // newest first (after cutoff → filtered); carries time
+          {
+            version: "6.1.0",
+            version_normalized: "6.1.0.0",
+            time: "2024-02-01T00:00:00Z",
+          },
+          // older (before cutoff → kept); no time field: inherits from entry above
+          {
+            version: "6.0.0",
+            version_normalized: "6.0.0.0",
+            time: "2024-01-01T00:00:00Z",
+          },
+          // oldest (before cutoff → kept); no time field: must inherit "2024-01-01"
+          {
+            version: "5.0.0",
+            version_normalized: "5.0.0.0",
+          },
+        ],
+      },
+      minified: "composer/2.0",
+    };
+    const res = await handle("/p2/symfony/console.json", data);
+    const result = responseBody(res);
+    const versions = (result["packages"] as Record<string, unknown[]>)[
+      "symfony/console"
+    ];
+    expect(versions).toHaveLength(2);
+    expect((versions[0] as Record<string, unknown>)["version"]).toBe("6.0.0");
+    expect((versions[1] as Record<string, unknown>)["version"]).toBe("5.0.0");
+    // 5.0.0 must have inherited time from 6.0.0 so it was not incorrectly filtered out
+    expect((versions[1] as Record<string, unknown>)["time"]).toBe(
+      "2024-01-01T00:00:00Z",
+    );
+  });
+
+  it("returns 404 when all versions are filtered out", async () => {
+    const data = {
+      packages: {
+        "symfony/console": [
+          makeVersion("6.1.0", "6.1.0.0", "2024-02-01T00:00:00Z"), // after cutoff
         ],
       },
     };
-
-    const original = JSON.parse(JSON.stringify(data));
-    proxy.filterMetadata(data, CUTOFF);
-    expect(data).toEqual(original);
+    const res = await handle("/p2/symfony/console.json", data);
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });

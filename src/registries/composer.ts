@@ -59,7 +59,7 @@ export class ComposerRegistryProxy extends RegistryProxy {
       typeof obj.packages === "object" &&
       !Array.isArray(obj.packages)
     ) {
-      return this.filterPackages(obj as ComposerPackagesResponse, cutoffDate);
+      return filterComposerPackages(obj as ComposerPackagesResponse, cutoffDate);
     }
 
     return data;
@@ -109,41 +109,41 @@ export class ComposerRegistryProxy extends RegistryProxy {
     }
     return result;
   }
+}
 
-  /**
-   * Propagate `time` through Packagist's minified diff-chain format.
-   * Each entry only stores fields that changed from the previous entry, so
-   * entries without `time` inherit the last seen value.
-   */
-  private propagateTime(versions: ComposerVersion[]): ComposerVersion[] {
-    let lastTime: string | undefined;
-    return versions.map((v) => {
-      if (v.time !== undefined) lastTime = v.time;
-      return lastTime !== undefined && v.time === undefined
-        ? { ...v, time: lastTime }
-        : v;
-    });
-  }
+/**
+ * Propagate `time` through Packagist's minified diff-chain format.
+ * Each entry only stores fields that changed from the previous entry, so
+ * entries without `time` inherit the last seen value.
+ */
+function propagateTime(versions: ComposerVersion[]): ComposerVersion[] {
+  let lastTime: string | undefined;
+  return versions.map((v) => {
+    if (v.time !== undefined) lastTime = v.time;
+    return lastTime !== undefined && v.time === undefined
+      ? { ...v, time: lastTime }
+      : v;
+  });
+}
 
-  private filterPackages(
-    data: ComposerPackagesResponse,
-    cutoffDate: Date,
-  ): unknown | null {
-    const raw = data as Record<string, unknown>;
-    const filteredPackages: Record<string, ComposerVersion[]> = {};
+function filterComposerPackages(
+  data: ComposerPackagesResponse,
+  cutoffDate: Date,
+): unknown | null {
+  const raw = data as Record<string, unknown>;
+  const filteredPackages: Record<string, ComposerVersion[]> = {};
 
-    for (const [pkgName, versions] of Object.entries(data.packages)) {
-      const expanded = this.propagateTime(versions);
-      const filtered = expanded.filter(
-        (v) => v.time && new Date(v.time) <= cutoffDate,
-      );
-      if (filtered.length > 0) {
-        filteredPackages[pkgName] = filtered;
-      }
+  for (const [pkgName, versions] of Object.entries(data.packages)) {
+    const expanded = propagateTime(versions);
+    const filtered = expanded.filter(
+      (v) => v.time && new Date(v.time) <= cutoffDate,
+    );
+    if (filtered.length > 0) {
+      filteredPackages[pkgName] = filtered;
     }
-
-    if (Object.keys(filteredPackages).length === 0) return null;
-
-    return { ...raw, packages: filteredPackages };
   }
+
+  if (Object.keys(filteredPackages).length === 0) return null;
+
+  return { ...raw, packages: filteredPackages };
 }

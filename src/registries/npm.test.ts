@@ -1,28 +1,67 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NpmRegistryProxy } from './npm.ts';
+import { makeHandle, responseBody } from './test-helpers.ts';
+
+vi.mock('axios', () => ({
+  default: { get: vi.fn() },
+}));
+
+import axios from 'axios';
+
+const DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+const CUTOFF = new Date('2024-01-15T00:00:00Z');
+const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 
 const proxy = new NpmRegistryProxy({
   upstream: 'https://registry.npmjs.org',
-  delayMs: 7 * 24 * 60 * 60 * 1000,
+  delayMs: DELAY_MS,
 });
 
-const CUTOFF = new Date('2024-01-15T00:00:00Z');
+const handle = makeHandle(proxy, vi.mocked(axios.get));
 
-describe('NpmRegistryProxy.filterMetadata', () => {
-  it('returns data unchanged when versions field is missing', () => {
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('NpmRegistryProxy – routing', () => {
+  it('routes metadata paths to metadata handler (not streamed)', async () => {
+    const mockStream = { pipe: vi.fn() };
+    await handle('/lodash', mockStream);
+    expect(mockStream.pipe).not.toHaveBeenCalled();
+  });
+
+  it('streams tarball paths as passthrough', async () => {
+    const mockStream = { pipe: vi.fn() };
+    const res = await handle('/lodash/-/lodash-4.17.21.tgz', mockStream);
+    expect(mockStream.pipe).toHaveBeenCalledWith(res);
+  });
+});
+
+describe('NpmRegistryProxy – metadata filtering', () => {
+  it('returns data unchanged when versions field is missing', async () => {
     const data = { name: 'pkg', 'dist-tags': { latest: '1.0.0' } };
-    expect(proxy.filterMetadata(data, CUTOFF)).toBe(data);
+    const res = await handle('/lodash', data);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(data);
   });
 
-  it('returns data unchanged when time field is missing', () => {
+  it('returns data unchanged when time field is missing', async () => {
     const data = { name: 'pkg', 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': {} } };
-    expect(proxy.filterMetadata(data, CUTOFF)).toBe(data);
+    const res = await handle('/lodash', data);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(data);
   });
 
-  it('filters out versions published after cutoff date', () => {
+  it('filters out versions published after cutoff date', async () => {
     const data = {
       name: 'pkg',
-      'dist-tags': { latest: '1.1.0' },
+      'dist-tags': { latest: '1.0.0' },
       versions: { '1.0.0': {}, '1.1.0': {} },
       time: {
         created: '2023-01-01T00:00:00Z',
@@ -31,15 +70,14 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.1.0': '2024-02-01T00:00:00Z',  // after cutoff -> filtered
       },
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-
-    expect(Object.keys(result.versions)).toEqual(['1.0.0']);
-    expect(Object.keys(result.time)).toContain('1.0.0');
-    expect(Object.keys(result.time)).not.toContain('1.1.0');
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    expect(Object.keys(result.versions as object)).toEqual(['1.0.0']);
+    expect(Object.keys(result.time as object)).toContain('1.0.0');
+    expect(Object.keys(result.time as object)).not.toContain('1.1.0');
   });
 
-  it('includes versions published exactly at the cutoff date', () => {
+  it('includes versions published exactly at the cutoff date', async () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.0.0' },
@@ -50,12 +88,12 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.0.0': '2024-01-15T00:00:00Z',  // exactly at cutoff -> allowed
       },
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    expect(Object.keys(result.versions)).toEqual(['1.0.0']);
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    expect(Object.keys(result.versions as object)).toEqual(['1.0.0']);
   });
 
-  it('preserves special time keys: created and modified', () => {
+  it('preserves special time keys: created and modified', async () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.0.0' },
@@ -66,13 +104,13 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.0.0': '2024-01-01T00:00:00Z',
       },
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    expect(result.time.created).toBe('2023-01-01T00:00:00Z');
-    expect(result.time.modified).toBe('2024-02-01T00:00:00Z');
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    expect((result.time as Record<string, string>).created).toBe('2023-01-01T00:00:00Z');
+    expect((result.time as Record<string, string>).modified).toBe('2024-02-01T00:00:00Z');
   });
 
-  it('redirects dist-tags to the latest allowed version when current tag is filtered', () => {
+  it('redirects dist-tags to the latest allowed version when current tag is filtered', async () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.2.0' },
@@ -85,13 +123,12 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.2.0': '2024-02-01T00:00:00Z',  // filtered
       },
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    // latest tag should fall back to 1.1.0 (most recently published allowed version)
-    expect(result['dist-tags'].latest).toBe('1.1.0');
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    expect((result['dist-tags'] as Record<string, string>).latest).toBe('1.1.0');
   });
 
-  it('keeps dist-tags that already point to allowed versions', () => {
+  it('keeps dist-tags that already point to allowed versions', async () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.0.0', beta: '1.1.0' },
@@ -103,13 +140,13 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.1.0': '2024-01-10T00:00:00Z',  // allowed
       },
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
-    expect(result['dist-tags'].latest).toBe('1.0.0');
-    expect(result['dist-tags'].beta).toBe('1.1.0');
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    expect((result['dist-tags'] as Record<string, string>).latest).toBe('1.0.0');
+    expect((result['dist-tags'] as Record<string, string>).beta).toBe('1.1.0');
   });
 
-  it('returns null when all versions are filtered out (treat package as not found)', () => {
+  it('returns 404 when all versions are filtered out', async () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.0.0' },
@@ -120,11 +157,11 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.0.0': '2024-02-01T00:00:00Z',  // after cutoff -> filtered
       },
     };
-
-    expect(proxy.filterMetadata(data, CUTOFF)).toBeNull();
+    const res = await handle('/lodash', data);
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 
-  it('preserves other top-level package fields', () => {
+  it('preserves other top-level package fields', async () => {
     const data = {
       name: 'pkg',
       description: 'A test package',
@@ -137,14 +174,14 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.0.0': '2024-01-01T00:00:00Z',
       },
     };
-
-    const result = proxy.filterMetadata(data, CUTOFF) as typeof data;
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
     expect(result.name).toBe('pkg');
     expect(result.description).toBe('A test package');
     expect(result.readme).toBe('some readme');
   });
 
-  it('does not mutate the original data', () => {
+  it('does not mutate the original data', async () => {
     const data = {
       name: 'pkg',
       'dist-tags': { latest: '1.1.0' },
@@ -156,9 +193,13 @@ describe('NpmRegistryProxy.filterMetadata', () => {
         '1.1.0': '2024-02-01T00:00:00Z',
       },
     };
-
     const original = JSON.parse(JSON.stringify(data));
-    proxy.filterMetadata(data, CUTOFF);
+    await handle('/lodash', data);
     expect(data).toEqual(original);
+  });
+
+  it('proxies upstream non-200 status', async () => {
+    const res = await handle('/lodash', { error: 'not found' }, 404);
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });

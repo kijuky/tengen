@@ -8,21 +8,19 @@ interface RubyGemVersion {
   [key: string]: unknown;
 }
 
+function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
+  if (!Array.isArray(data)) {
+    return data;
+  }
+
+  const versions = data as RubyGemVersion[];
+  const filtered = versions.filter((v) => new Date(v.created_at) <= cutoffDate);
+
+  return filtered.length === 0 ? null : filtered;
+}
+
 export class RubygemsRegistryProxy extends RegistryProxy {
   readonly name = 'rubygems';
-
-  filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
-    if (!Array.isArray(data)) {
-      return data;
-    }
-
-    const versions = data as RubyGemVersion[];
-    const filtered = versions.filter(
-      (v) => new Date(v.created_at) <= cutoffDate,
-    );
-
-    return filtered.length === 0 ? null : filtered;
-  }
 
   /**
    * Routes requests:
@@ -35,19 +33,23 @@ export class RubygemsRegistryProxy extends RegistryProxy {
       await this.handleCompactInfoRequest(req.path, res);
       return;
     }
-    if (req.path.startsWith('/api/v1/versions/') && req.path.endsWith('.json')) {
+    if (
+      req.path.startsWith('/api/v1/versions/') &&
+      req.path.endsWith('.json')
+    ) {
       await this.handleVersionsJsonRequest(req, res);
       return;
     }
     await this.handlePassthrough(req, res);
   }
 
-  private async handleVersionsJsonRequest(req: Request, res: Response): Promise<void> {
+  private async handleVersionsJsonRequest(
+    req: Request,
+    res: Response,
+  ): Promise<void> {
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    await this.handleFilteredJson(
-      res,
-      this.buildUpstreamUrl(req),
-      (data) => this.filterMetadata(data, cutoffDate),
+    await this.handleFilteredJson(res, this.buildUpstreamUrl(req), (data) =>
+      filterMetadata(data, cutoffDate),
     );
   }
 

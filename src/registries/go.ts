@@ -10,12 +10,6 @@ interface GoVersionInfo {
 export class GoRegistryProxy extends RegistryProxy {
   readonly name = 'go';
 
-  filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
-    const info = data as GoVersionInfo;
-    if (!info.Time) return data;
-    return new Date(info.Time) <= cutoffDate ? info : null;
-  }
-
   /**
    * Routes requests:
    *   /@v/list   → filtered version list
@@ -44,29 +38,12 @@ export class GoRegistryProxy extends RegistryProxy {
     await this.handleFilteredJson(
       res,
       this.buildUpstreamUrl(req),
-      (data) => this.filterMetadata(data, cutoffDate),
+      (data) => filterGoMetadata(data, cutoffDate),
     );
   }
 
   private upstreamOrigin(): string {
     return new URL(this.config.upstream).origin;
-  }
-
-  private async fetchInfo(
-    origin: string,
-    modulePath: string,
-    version: string,
-  ): Promise<GoVersionInfo | null> {
-    try {
-      const res = await axios.get<GoVersionInfo>(
-        `${origin}${modulePath}/@v/${version}.info`,
-        { validateStatus: () => true, maxRedirects: 0 },
-      );
-      if (res.status === 200 && res.data.Time) return res.data;
-    } catch {
-      // ignore
-    }
-    return null;
   }
 
   private async handleList(path: string, res: Response): Promise<void> {
@@ -89,7 +66,7 @@ export class GoRegistryProxy extends RegistryProxy {
 
     const results = await Promise.all(
       versions.map(async (version) => {
-        const info = await this.fetchInfo(origin, modulePath, version);
+        const info = await fetchGoInfo(origin, modulePath, version);
         if (info && new Date(info.Time) <= cutoffDate) return version;
         return null;
       }),
@@ -139,7 +116,7 @@ export class GoRegistryProxy extends RegistryProxy {
     const versions = listRes.data.split('\n').filter((v) => v.trim());
     const infos = await Promise.all(
       versions.map(async (version) => {
-        const info = await this.fetchInfo(origin, modulePath, version);
+        const info = await fetchGoInfo(origin, modulePath, version);
         if (info) return { info, time: new Date(info.Time) };
         return null;
       }),
@@ -159,4 +136,27 @@ export class GoRegistryProxy extends RegistryProxy {
 
     res.status(200).json(allowed[0].info);
   }
+}
+
+function filterGoMetadata(data: unknown, cutoffDate: Date): unknown | null {
+  const info = data as GoVersionInfo;
+  if (!info.Time) return data;
+  return new Date(info.Time) <= cutoffDate ? info : null;
+}
+
+async function fetchGoInfo(
+  origin: string,
+  modulePath: string,
+  version: string,
+): Promise<GoVersionInfo | null> {
+  try {
+    const res = await axios.get<GoVersionInfo>(
+      `${origin}${modulePath}/@v/${version}.info`,
+      { validateStatus: () => true, maxRedirects: 0 },
+    );
+    if (res.status === 200 && res.data.Time) return res.data;
+  } catch {
+    // ignore
+  }
+  return null;
 }
