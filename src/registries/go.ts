@@ -14,8 +14,7 @@ export class GoRegistryProxy extends RegistryProxy {
    * Routes requests:
    *   /@v/list   → filtered version list
    *   /@latest   → latest allowed version info
-   *   /@v/*.info → version timestamp metadata (filtered)
-   *   everything else → passthrough (/.mod, /.zip, etc.)
+   *   everything else → passthrough (/.mod, /.zip, *.info, etc.)
    */
   override async handleRequest(req: Request, res: Response): Promise<void> {
     if (req.path.endsWith("/@v/list")) {
@@ -26,21 +25,7 @@ export class GoRegistryProxy extends RegistryProxy {
       await this.handleLatest(req.path, res);
       return;
     }
-    if (req.path.endsWith(".info")) {
-      await this.handleVersionInfoRequest(req, res);
-      return;
-    }
     await this.handlePassthrough(req, res);
-  }
-
-  private async handleVersionInfoRequest(
-    req: Request,
-    res: Response,
-  ): Promise<void> {
-    const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    await this.handleFilteredJson(res, this.buildUpstreamUrl(req), (data) =>
-      filterGoMetadata(data, cutoffDate),
-    );
   }
 
   private upstreamOrigin(): string {
@@ -141,12 +126,6 @@ export class GoRegistryProxy extends RegistryProxy {
 
     res.status(200).json(allowed[0].info);
   }
-}
-
-function filterGoMetadata(data: unknown, cutoffDate: Date): unknown | null {
-  const info = data as GoVersionInfo;
-  if (!info.Time) return data;
-  return new Date(info.Time) <= cutoffDate ? info : null;
 }
 
 async function fetchGoInfo(

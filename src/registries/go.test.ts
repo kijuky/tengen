@@ -29,49 +29,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("GoRegistryProxy.handleRequest - /@v/*.info", () => {
-  it("returns 200 when version was published before cutoff", async () => {
-    const info = { Version: "v1.0.0", Time: "2024-01-01T00:00:00Z" };
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.info", info);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(info);
-  });
-
-  it("returns 200 when version was published exactly at cutoff", async () => {
-    const info = { Version: "v1.0.0", Time: "2024-01-15T00:00:00Z" };
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.info", info);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(info);
-  });
-
-  it("returns 404 when version was published after cutoff", async () => {
-    const info = { Version: "v1.0.0", Time: "2024-02-01T00:00:00Z" };
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.info", info);
-
-    expect(res.status).toHaveBeenCalledWith(404);
-  });
-
-  it("returns 200 with data unchanged when Time field is missing", async () => {
-    const info = { Version: "v1.0.0" };
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.info", info);
-
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith(info);
-  });
-
-  it("proxies upstream non-200 status", async () => {
-    const res = await handle(
-      "/github.com/foo/bar/@v/v1.0.0.info",
-      { error: "not found" },
-      404,
-    );
-
-    expect(res.status).toHaveBeenCalledWith(404);
-  });
-});
-
 describe("GoRegistryProxy.handleRequest - /@v/list", () => {
   it("returns only versions published before or at cutoff", async () => {
     mockedGet
@@ -197,6 +154,14 @@ describe("GoRegistryProxy.handleRequest - /@latest", () => {
 });
 
 describe("GoRegistryProxy.handleRequest - passthrough", () => {
+  it("redirects .info requests", async () => {
+    const res = await handle("/github.com/foo/bar/@v/v1.0.0.info", {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.info",
+    );
+  });
+
   it("redirects .mod requests", async () => {
     const res = await handle("/github.com/foo/bar/@v/v1.0.0.mod", {});
     expect(res.redirect).toHaveBeenCalledWith(
