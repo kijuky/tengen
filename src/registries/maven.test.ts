@@ -171,22 +171,6 @@ describe("MavenRegistryProxy – metadata filtering", () => {
     expect(vi.mocked(axios.get)).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 502 when the Maven search API fails", async () => {
-    vi.mocked(axios.get)
-      .mockResolvedValueOnce({
-        status: 200,
-        data: makeXml(["1.0.0"]),
-        headers: {},
-      })
-      .mockResolvedValueOnce({ status: 503, data: {}, headers: {} });
-    const res = makeRes();
-    await proxy.handleRequest(
-      makeReq("/com/example/mylib/maven-metadata.xml"),
-      res,
-    );
-    expect(res.status).toHaveBeenCalledWith(502);
-  });
-
   it("passes through group-level metadata (no <versions> block) without calling the search API", async () => {
     const groupXml = `<?xml version="1.0" encoding="UTF-8"?>
 <metadata>

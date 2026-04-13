@@ -44,12 +44,16 @@ describe('ComposerRegistryProxy – routing', () => {
   });
 
   it('routes /p2/vendor/package.json to metadata handler (not redirected)', async () => {
-    const res = await handle('/p2/vendor/package.json', {});
+    const res = await handle('/p2/vendor/package.json', {
+      packages: {},
+    });
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
   it('routes /p2/vendor/package~dev.json to metadata handler (not redirected)', async () => {
-    const res = await handle('/p2/vendor/package~dev.json', {});
+    const res = await handle('/p2/vendor/package~dev.json', {
+      packages: {},
+    });
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
@@ -111,6 +115,11 @@ describe('ComposerRegistryProxy – packages.json URL rewriting', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(data);
   });
+
+  it('proxies upstream non-200 status for /packages.json', async () => {
+    const res = await handle('/packages.json', { error: 'service unavailable' }, 503);
+    expect(res.status).toHaveBeenCalledWith(503);
+  });
 });
 
 describe('ComposerRegistryProxy – package metadata filtering', () => {
@@ -147,6 +156,11 @@ describe('ComposerRegistryProxy – package metadata filtering', () => {
       'symfony/console'
     ];
     expect(versions).toHaveLength(1);
+  });
+
+  it('proxies upstream non-200 status for /p2/ package endpoint', async () => {
+    const res = await handle('/p2/vendor/package.json', { error: 'not found' }, 404);
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 
   it('propagates time through minified diff-chain before filtering (newest-first real-world format)', async () => {
@@ -187,17 +201,5 @@ describe('ComposerRegistryProxy – package metadata filtering', () => {
     // 5.0.0 was not incorrectly filtered out (it inherited time "2024-01-01" from 6.0.0).
     // After re-minification the time field is omitted because it equals the previous entry.
     expect((versions[1] as Record<string, unknown>)['time']).toBeUndefined();
-  });
-
-  it('returns 404 when all versions are filtered out', async () => {
-    const data = {
-      packages: {
-        'symfony/console': [
-          makeVersion('6.1.0', '6.1.0.0', '2024-02-01T00:00:00Z'), // after cutoff
-        ],
-      },
-    };
-    const res = await handle('/p2/symfony/console.json', data);
-    expect(res.status).toHaveBeenCalledWith(404);
   });
 });

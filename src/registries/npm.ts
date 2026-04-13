@@ -1,9 +1,8 @@
-import type { Request, Response } from "express";
-import { RegistryProxy } from "./base.ts";
+import { RegistryProxy, type VersionMetadata } from './base.ts';
 
 interface NpmPackageMetadata {
   name: string;
-  "dist-tags": Record<string, string>;
+  'dist-tags': Record<string, string>;
   versions: Record<string, unknown>;
   /** Keys: version strings + "created" + "modified" */
   time: Record<string, string>;
@@ -11,106 +10,73 @@ interface NpmPackageMetadata {
 }
 
 export class NpmRegistryProxy extends RegistryProxy {
-  readonly name = "npm";
+  readonly name = 'npm';
 
-  /**
-   * Tarball paths look like:  /lodash/-/lodash-4.17.21.tgz
-   *                       or  /@scope/pkg/-/pkg-1.0.0.tgz
-   * Everything else is treated as metadata.
-   */
-  override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (!req.path.includes("/-/")) {
-      await this.handleMetadataRequest(req, res);
-    } else {
-      await this.handlePassthrough(req, res);
+  public setRouting() {
+    this.addMetadataRoute<NpmPackageMetadata>({
+      condition: (req) => !req.path.includes('/-/'),
+      getVersions: getVersionMetadata,
+      filterMetadata,
+    });
+  }
+}
+
+function getVersionMetadata(metadata: NpmPackageMetadata): VersionMetadata[] {
+  const versions: VersionMetadata[] = [];
+  for (const version of Object.keys(metadata.versions)) {
+    const publishedStr = metadata.time[version];
+    if (typeof publishedStr === 'string') {
+      versions.push({ version, published: new Date(publishedStr) });
     }
   }
+  return versions;
+}
 
-  private async handleMetadataRequest(
-    req: Request,
-    res: Response,
-  ): Promise<void> {
-    const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    await this.handleFilteredJson(res, this.buildUpstreamUrl(req), (data) =>
-      filterMetadata(data, cutoffDate),
-    );
+async function filterMetadata(
+  metadata: NpmPackageMetadata,
+  allowedVersions: VersionMetadata[],
+) {
+  for (const version of Object.keys(metadata.versions)) {
+    if (!allowedVersions.some((v) => v.version === version)) {
+      delete metadata.versions[version];
+    }
   }
+  for (const key of Object.keys(metadata.time)) {
+    if (
+      key !== 'created' &&
+      key !== 'modified' &&
+      !allowedVersions.some((v) => v.version === key)
+    ) {
+      delete metadata.time[key];
+    }
+  }
+  metadata['dist-tags'] = filterDistTags(
+    metadata['dist-tags'],
+    allowedVersions,
+  );
+  return metadata;
 }
 
 function filterDistTags(
   distTags: Record<string, string>,
-  allowedVersions: Set<string>,
-  time: Record<string, string>,
+  allowedVersions: VersionMetadata[],
 ): Record<string, string> {
   // Pre-compute the latest allowed version by publish date, used as fallback
-  const latestAllowedVersion = [...allowedVersions].sort((a, b) => {
-    const ta = time[a] ? new Date(time[a]).getTime() : 0;
-    const tb = time[b] ? new Date(time[b]).getTime() : 0;
-    return tb - ta;
+  const latestAllowedVersion = allowedVersions.sort((a, b) => {
+    return b.published.getTime() - a.published.getTime();
   })[0];
 
+  const allowedVersionsSet = new Set(allowedVersions.map((v) => v.version));
   const result: Record<string, string> = {};
   for (const [tag, version] of Object.entries(distTags)) {
-    if (allowedVersions.has(version)) {
+    if (allowedVersionsSet.has(version)) {
       result[tag] = version;
-    } else if (latestAllowedVersion !== undefined) {
+    } else if (tag == 'latest' && latestAllowedVersion !== undefined) {
       // Point the tag to the newest version that passed the delay filter
-      result[tag] = latestAllowedVersion;
+      result[tag] = latestAllowedVersion.version;
+    } else {
+      delete distTags[tag];
     }
-    // If there are no allowed versions at all, drop the tag entirely
   }
   return result;
-}
-
-function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
-  const pkg = data as NpmPackageMetadata;
-
-  if (!pkg.versions || !pkg.time) {
-    return data;
-  }
-
-  // Collect versions that were published before the cutoff
-  const allowedVersions = new Set<string>();
-  for (const [key, publishedAt] of Object.entries(pkg.time)) {
-    if (key === "created" || key === "modified") continue;
-    if (new Date(publishedAt) <= cutoffDate) {
-      allowedVersions.add(key);
-    }
-  }
-
-  // If all versions are filtered out, treat as if the package doesn't exist
-  if (allowedVersions.size === 0) {
-    return null;
-  }
-
-  // Filter versions object
-  const filteredVersions: Record<string, unknown> = {};
-  for (const [version, info] of Object.entries(pkg.versions)) {
-    if (allowedVersions.has(version)) {
-      filteredVersions[version] = info;
-    }
-  }
-
-  // Filter time object (keep special keys)
-  const filteredTime: Record<string, string> = {};
-  for (const [key, value] of Object.entries(pkg.time)) {
-    if (key === "created" || key === "modified" || allowedVersions.has(key)) {
-      filteredTime[key] = value;
-    }
-  }
-
-  // Update dist-tags: if a tag points to a filtered version,
-  // fall back to the most recently published allowed version.
-  const filteredDistTags = filterDistTags(
-    pkg["dist-tags"],
-    allowedVersions,
-    pkg.time,
-  );
-
-  return {
-    ...pkg,
-    versions: filteredVersions,
-    time: filteredTime,
-    "dist-tags": filteredDistTags,
-  };
 }

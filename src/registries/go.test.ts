@@ -128,6 +128,19 @@ describe("GoRegistryProxy.handleRequest - /@latest", () => {
     expect(res.json).toHaveBeenCalledWith(v110Info);
   });
 
+  it("returns 404 when latest is after cutoff and the fallback list request returns non-200", async () => {
+    const latestInfo = { Version: "v1.0.0", Time: "2024-02-01T00:00:00Z" }; // too new
+
+    mockedGet
+      .mockResolvedValueOnce({ status: 200, data: latestInfo, headers: {} })
+      .mockResolvedValueOnce({ status: 503, data: "", headers: {} }); // list fetch fails
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/github.com/foo/bar/@latest"), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
   it("returns 404 when latest is after cutoff and all list versions are too new", async () => {
     const latestInfo = { Version: "v1.0.0", Time: "2024-02-01T00:00:00Z" };
 
@@ -150,6 +163,29 @@ describe("GoRegistryProxy.handleRequest - /@latest", () => {
     );
 
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe("GoRegistryProxy.handleRequest - /@v/list (info fetch failures)", () => {
+  it("excludes versions whose .info fetch fails (network error) from the list", async () => {
+    mockedGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: "v1.0.0\nv1.1.0\n",
+        headers: {},
+      })
+      .mockRejectedValueOnce(new Error("network error")) // v1.0.0 info fetch fails
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v1.1.0", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/list"), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(vi.mocked(res.send)).toHaveBeenCalledWith("v1.1.0\n");
   });
 });
 

@@ -1,7 +1,6 @@
-import type { Request, Response } from "express";
-import axios from "axios";
-import escapeHtml from "escape-html";
-import { RegistryProxy } from "./base.ts";
+import escapeHtml from 'escape-html';
+import { RegistryProxy, type VersionMetadata } from './base.ts';
+import axios from 'axios';
 
 interface PyPiFile {
   upload_time_iso_8601: string;
@@ -19,201 +18,182 @@ interface PyPiMetadata {
   urls: PyPiFile[];
   [key: string]: unknown;
 }
+interface PypiVersionMetadataType extends VersionMetadata {
+  filename: string;
+}
 
 interface SimpleApiFile {
   filename: string;
   url: string;
   hashes: Record<string, string>;
-  "upload-time"?: string;
-  "requires-python"?: string;
+  'upload-time'?: string;
+  'requires-python'?: string;
   [key: string]: unknown;
 }
 
 interface SimpleApiMetadata {
-  meta: { "api-version": string };
+  meta: { 'api-version': string };
   name: string;
   files: SimpleApiFile[];
-  versions?: string[];
+  versions: string[];
   [key: string]: unknown;
 }
 
-/**
- * Extract the version string from a wheel or sdist filename.
- * wheel:  {name}-{version}-{pytag}-{abitag}-{platformtag}.whl
- * sdist:  {name}-{version}.tar.gz | .zip | .tar.bz2
- */
-function extractVersion(filename: string): string {
-  const withoutExt = filename.replace(/\.(whl|tar\.gz|tar\.bz2|tgz|zip)$/, "");
-  return withoutExt.split("-")[1] ?? "";
-}
-
 export class PypiRegistryProxy extends RegistryProxy {
-  readonly name = "pypi";
+  readonly name = 'pypi';
 
   /**
-   * Routes requests:
+   * Routes:
    *   /simple/{name}/             → Simple API (HTML or JSON)
    *   /pypi/{name}/json           → JSON API metadata (package-level)
    *   /pypi/{name}/{version}/json → JSON API metadata (version-specific)
    *   everything else             → binary artifact passthrough
    */
-  override async handleRequest(req: Request, res: Response): Promise<void> {
-    const simpleMatch = req.path.match(/^\/simple\/([^/]+)\/?$/);
-    if (simpleMatch) {
-      await this.handleSimpleApiRequest(req, res, simpleMatch[1]);
-    } else if (req.path.endsWith("/json")) {
-      await this.handleJsonApiRequest(req, res);
-    } else {
-      await this.handlePassthrough(req, res);
-    }
-  }
-
-  private async handleSimpleApiRequest(
-    req: Request,
-    res: Response,
-    packageName: string,
-  ): Promise<void> {
-    const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    const upstreamBase = new URL(this.config.upstream);
-    // PyPI Simple API lives under /simple/, not /pypi/
-    const upstreamUrl = `${upstreamBase.origin}/simple/${packageName}/`;
-
-    // Always request JSON Simple API from upstream to get upload-time for filtering
-    const response = await axios.get<SimpleApiMetadata>(upstreamUrl, {
-      validateStatus: () => true,
-      maxRedirects: 0,
-      headers: { Accept: "application/vnd.pypi.simple.v1+json" },
+  public setRouting() {
+    this.addMetadataRoute<SimpleApiMetadata, PypiVersionMetadataType>({
+      condition: (req) =>
+        req.path.startsWith('/simple/') && req.path.endsWith('/'),
+      requestUpstream: async (originalReq) => {
+        return await axios.get<SimpleApiMetadata>(
+          this.buildUpstreamUrl(originalReq),
+          {
+            validateStatus: () => true,
+            maxRedirects: 0,
+            headers: {
+              Accept: 'application/vnd.pypi.simple.v1+json',
+            },
+          },
+        );
+      },
+      getVersions: (metadata) => getSimpleApiVersions(metadata),
+      filterMetadata: filterSimpleApiMetadata,
+      respond: (res, filtered, req) => {
+        if (
+          req.headers.accept?.includes('application/vnd.pypi.simple.v1+json')
+        ) {
+          res
+            .status(200)
+            .setHeader('content-type', 'application/vnd.pypi.simple.v1+json')
+            .json(filtered);
+        } else {
+          res
+            .status(200)
+            .setHeader('content-type', 'text/html')
+            .send(toSimpleApiHtml(filtered));
+        }
+      },
     });
-
-    if (response.status !== 200) {
-      res.status(response.status).json(response.data);
-      return;
-    }
-
-    const data = response.data;
-    const filteredFiles = data.files.filter((file) => {
-      if (!file["upload-time"]) return true;
-      return new Date(file["upload-time"]) <= cutoffDate;
+    this.addMetadataRoute<PyPiMetadata>({
+      condition: (req) =>
+        req.path.startsWith('/pypi/') && req.path.endsWith('/json'),
+      getVersions: getPackageLevelVersions,
+      filterMetadata: filterPackageLevelMetadata,
     });
-
-    if (filteredFiles.length === 0 && data.files.length > 0) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-
-    const allowedVersions = new Set(
-      filteredFiles.map((f) => extractVersion(f.filename)),
-    );
-    const filteredVersions = data.versions?.filter((v) =>
-      allowedVersions.has(v),
-    );
-
-    const filtered: SimpleApiMetadata = {
-      ...data,
-      files: filteredFiles,
-      ...(filteredVersions !== undefined && { versions: filteredVersions }),
-    };
-
-    if (req.headers.accept?.includes("application/vnd.pypi.simple.v1+json")) {
-      res
-        .status(200)
-        .setHeader("content-type", "application/vnd.pypi.simple.v1+json")
-        .json(filtered);
-    } else {
-      res
-        .status(200)
-        .setHeader("content-type", "text/html")
-        .send(toSimpleApiHtml(filtered));
-    }
   }
+}
 
-  private async handleJsonApiRequest(
-    req: Request,
-    res: Response,
-  ): Promise<void> {
-    const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    await this.handleFilteredJson(res, this.buildUpstreamUrl(req), (data) =>
-      filterMetadata(data, cutoffDate),
-    );
-  }
+// ── Simple API (/simple/{name}/) ────────────────────────────────────────────
+
+function getSimpleApiVersions(
+  metadata: SimpleApiMetadata,
+): PypiVersionMetadataType[] {
+  const versions: PypiVersionMetadataType[] = [];
+  metadata.versions.map((ver) => {
+    metadata.files
+      .filter(
+        (file) =>
+          file.filename.includes(`-${ver}.`) ||
+          file.filename.includes(`-${ver}-`),
+      )
+      .forEach((file) => {
+        if (file['upload-time']) {
+          versions.push({
+            version: ver,
+            published: new Date(file['upload-time']),
+            filename: file.filename,
+          });
+        }
+      });
+  });
+  return versions;
+}
+
+function filterSimpleApiMetadata(
+  metadata: SimpleApiMetadata,
+  allowedVersions: PypiVersionMetadataType[],
+): SimpleApiMetadata {
+  const data = metadata as SimpleApiMetadata;
+  const allowedFilenamesSet = new Set(allowedVersions.map((v) => v.filename));
+  const allowedVersionsSet = new Set(allowedVersions.map((v) => v.version));
+  const filteredFiles = data.files.filter((f) =>
+    allowedFilenamesSet.has(f.filename),
+  );
+  const filteredVersions = data.versions.filter((v) =>
+    allowedVersionsSet.has(v),
+  );
+
+  return {
+    ...data,
+    files: filteredFiles,
+    versions: filteredVersions,
+  };
 }
 
 function toSimpleApiHtml(data: SimpleApiMetadata): string {
   const links = data.files
     .map((file) => {
-      const requiresPython = file["requires-python"]
-        ? ` data-requires-python="${escapeHtml(file["requires-python"])}"`
-        : "";
+      const requiresPython = file['requires-python']
+        ? ` data-requires-python="${escapeHtml(file['requires-python'])}"`
+        : '';
       return `    <a href="${file.url}"${requiresPython}>${file.filename}</a><br />`;
     })
-    .join("\n");
+    .join('\n');
   return [
-    "<!DOCTYPE html>",
+    '<!DOCTYPE html>',
     '<html lang="en">',
-    "  <head>",
+    '  <head>',
     `    <title>Links for ${data.name}</title>`,
-    "  </head>",
-    "  <body>",
+    '  </head>',
+    '  <body>',
     `    <h1>Links for ${data.name}</h1>`,
     links,
-    "  </body>",
-    "</html>",
-  ].join("\n");
+    '  </body>',
+    '</html>',
+  ].join('\n');
 }
 
-function filterMetadata(data: unknown, cutoffDate: Date): unknown | null {
-  const pkg = data as PyPiMetadata;
+// ── Package-level JSON API (/pypi/{name}/json) ───────────────────────────────
 
-  if (!pkg.releases) {
-    // Version-specific endpoint (/pypi/{name}/{version}/json) has no releases field.
-    // Use urls to check whether this version is within the delay window.
-    if (Array.isArray(pkg.urls) && pkg.urls.length > 0) {
-      const earliest = pkg.urls.reduce((min, file) => {
-        const t = new Date(file.upload_time_iso_8601);
-        return t < min ? t : min;
-      }, new Date(pkg.urls[0].upload_time_iso_8601));
-      if (earliest > cutoffDate) return null;
-    }
-    return data;
-  }
-
-  // Filter releases: keep a version if its earliest upload is before or at cutoff
-  const filteredReleases: Record<string, PyPiFile[]> = {};
-  for (const [version, files] of Object.entries(pkg.releases)) {
+function getPackageLevelVersions(metadata: PyPiMetadata): VersionMetadata[] {
+  if (!metadata.releases) return [];
+  const versions: VersionMetadata[] = [];
+  for (const [version, files] of Object.entries(metadata.releases)) {
     if (files.length === 0) continue;
-    const uploadTime = files.reduce((earliest, file) => {
-      const t = new Date(file.upload_time_iso_8601);
-      return t < earliest ? t : earliest;
+    const earliest = files.reduce((min, f) => {
+      const t = new Date(f.upload_time_iso_8601);
+      return t < min ? t : min;
     }, new Date(files[0].upload_time_iso_8601));
-
-    if (uploadTime <= cutoffDate) {
-      filteredReleases[version] = files;
-    }
+    versions.push({ version, published: earliest });
   }
+  return versions;
+}
 
-  if (Object.keys(filteredReleases).length === 0) {
-    return null;
+function filterPackageLevelMetadata(
+  metadata: PyPiMetadata,
+  allowedVersions: VersionMetadata[],
+): PyPiMetadata {
+  const allowedSet = new Set(allowedVersions.map((v) => v.version));
+  const filteredReleases: Record<string, PyPiFile[]> = {};
+  for (const [version, files] of Object.entries(metadata.releases)) {
+    if (allowedSet.has(version)) filteredReleases[version] = files;
   }
-
-  // Find the latest allowed version by upload time
-  let latestVersion = "";
-  let latestTime = new Date(0);
-  for (const [version, files] of Object.entries(filteredReleases)) {
-    if (files.length === 0) continue;
-    const t = new Date(files[0].upload_time_iso_8601);
-    if (t > latestTime) {
-      latestTime = t;
-      latestVersion = version;
-    }
-  }
-
+  const latestVersion = [...allowedVersions].sort(
+    (a, b) => b.published.getTime() - a.published.getTime(),
+  )[0];
   return {
-    ...pkg,
-    info: {
-      ...pkg.info,
-      version: latestVersion,
-    },
+    ...metadata,
+    info: { ...metadata.info, version: latestVersion?.version },
     releases: filteredReleases,
-    urls: filteredReleases[latestVersion] ?? [],
+    urls: latestVersion ? (filteredReleases[latestVersion.version] ?? []) : [],
   };
 }
