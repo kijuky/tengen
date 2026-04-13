@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { RubygemsRegistryProxy } from './rubygems.ts';
 import { makeHandle, makeReq, makeRes } from './test-helpers.ts';
+
+vi.mock('node:fs', () => ({
+  readFileSync: vi.fn(),
+}));
+
+const mockReadFileSync = vi.mocked(readFileSync);
 
 vi.mock('axios', () => {
   const fn = Object.assign(vi.fn(), { get: vi.fn() });
@@ -271,5 +278,92 @@ describe('RubygemsRegistryProxy – /info/{name}', () => {
     const res = await handleInfo('unknown-gem', 'not found', 404, null, 404);
 
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe('RubygemsRegistryProxy – malicious filtering', () => {
+  const MALICIOUS_DB = JSON.stringify({
+    maliciousPackages: ['evil-gem'],
+    maliciousVersions: { rails: ['7.0.0'] },
+  });
+
+  let maliciousProxy: RubygemsRegistryProxy;
+  let maliciousHandle: ReturnType<typeof makeHandle>;
+
+  beforeEach(() => {
+    mockedGet.mockReset();
+    mockReadFileSync.mockReturnValue(MALICIOUS_DB);
+    maliciousProxy = new RubygemsRegistryProxy({
+      upstream: 'https://rubygems.org',
+      delayMs: DELAY_MS,
+    });
+    maliciousHandle = makeHandle(maliciousProxy, mockedGet);
+  });
+
+  afterEach(() => {
+    mockReadFileSync.mockReset();
+  });
+
+  it('blocks all versions of a fully malicious gem (/api/v1/versions/)', async () => {
+    mockedGet.mockResolvedValueOnce({
+      status: 200,
+      data: [makeVersion('1.0.0', '2024-01-01T00:00:00Z')],
+      headers: {},
+    });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(makeReq('/api/v1/versions/evil-gem.json'), res);
+    expect(res.json).toHaveBeenCalledWith([]);
+  });
+
+  it('blocks a specific malicious version while keeping safe ones (/api/v1/versions/)', async () => {
+    const data = [
+      makeVersion('7.0.0', '2024-01-01T00:00:00Z'), // malicious → blocked
+      makeVersion('7.1.0', '2024-01-10T00:00:00Z'), // safe → allowed
+    ];
+    const res = await maliciousHandle('/api/v1/versions/rails.json', data);
+    const body = vi.mocked(res.json).mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(body).toHaveLength(1);
+    expect(body[0]['number']).toBe('7.1.0');
+  });
+
+  it('removes all version lines for a fully malicious gem (/info/)', async () => {
+    mockedGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: '---\n1.0.0 |checksum:abc\n',
+        headers: {},
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: [makeVersion('1.0.0', '2024-01-01T00:00:00Z')],
+        headers: {},
+      });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(makeReq('/info/evil-gem'), res);
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).toContain('---');
+    expect(body).not.toContain('1.0.0');
+  });
+
+  it('removes only the malicious version line (/info/)', async () => {
+    mockedGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: '---\n7.0.0 |checksum:abc\n7.1.0 |checksum:def\n',
+        headers: {},
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: [
+          makeVersion('7.0.0', '2024-01-01T00:00:00Z'), // malicious → blocked
+          makeVersion('7.1.0', '2024-01-10T00:00:00Z'), // safe → allowed
+        ],
+        headers: {},
+      });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(makeReq('/info/rails'), res);
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).not.toContain('7.0.0');
+    expect(body).toContain('7.1.0');
   });
 });

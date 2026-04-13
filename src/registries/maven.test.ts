@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { MavenRegistryProxy, parseMavenPath } from "./maven.ts";
 import { makeReq, makeRes } from "./test-helpers.ts";
@@ -6,6 +7,11 @@ import { makeReq, makeRes } from "./test-helpers.ts";
 vi.mock("axios", () => ({
   default: { get: vi.fn() },
 }));
+vi.mock("node:fs", () => ({
+  readFileSync: vi.fn(),
+}));
+
+const mockReadFileSync = vi.mocked(readFileSync);
 
 import axios from "axios";
 
@@ -223,5 +229,73 @@ describe("MavenRegistryProxy – checksum endpoints", () => {
       [{ v: "2.0.0", timestamp: AFTER_CUTOFF }],
     );
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe("MavenRegistryProxy – malicious filtering", () => {
+  // Maven OSV package name format: "groupId:artifactId"
+  // /com/example/evil/maven-metadata.xml → "com.example:evil"
+  // /com/example/mylib/maven-metadata.xml → "com.example:mylib"
+  const MALICIOUS_DB = JSON.stringify({
+    maliciousPackages: ["com.example:evil"],
+    maliciousVersions: { "com.example:mylib": ["1.0.0"] },
+  });
+
+  let maliciousProxy: MavenRegistryProxy;
+
+  beforeEach(() => {
+    mockReadFileSync.mockReturnValue(MALICIOUS_DB);
+    maliciousProxy = new MavenRegistryProxy({
+      upstream: "https://repo1.maven.org/maven2",
+      delayMs: DELAY_MS,
+    });
+  });
+
+  afterEach(() => {
+    mockReadFileSync.mockReset();
+  });
+
+  it("returns 404 when the artifact is fully malicious", async () => {
+    const xml = makeXml(["1.0.0"]);
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({ status: 200, data: xml, headers: {} })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { response: { docs: [{ v: "1.0.0", timestamp: BEFORE_CUTOFF }], numFound: 1 } },
+        headers: {},
+      });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq("/com/example/evil/maven-metadata.xml"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("blocks a specific malicious version while keeping safe ones", async () => {
+    const xml = makeXml(["1.0.0", "2.0.0"]);
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({ status: 200, data: xml, headers: {} })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          response: {
+            docs: [
+              { v: "1.0.0", timestamp: BEFORE_CUTOFF }, // malicious → blocked
+              { v: "2.0.0", timestamp: BEFORE_CUTOFF + 1000 }, // safe → allowed
+            ],
+            numFound: 2,
+          },
+        },
+        headers: {},
+      });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq("/com/example/mylib/maven-metadata.xml"),
+      res,
+    );
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).not.toContain("<version>1.0.0</version>");
+    expect(body).toContain("<version>2.0.0</version>");
   });
 });

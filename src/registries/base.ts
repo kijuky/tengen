@@ -1,5 +1,17 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Request, Response } from 'express';
 import axios, { type AxiosResponse } from 'axios';
+import type { EcosystemOutput } from '../types.ts';
+
+const DATA_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'data',
+  'malicious',
+);
 
 export interface RegistryConfig {
   /** Upstream registry base URL */
@@ -9,6 +21,7 @@ export interface RegistryConfig {
 }
 
 export interface VersionMetadata {
+  packageName: string;
   version: string;
   published: Date;
 }
@@ -48,6 +61,10 @@ export abstract class RegistryProxy {
   abstract readonly name: string;
   protected readonly config: RegistryConfig;
   private readonly metadataRouting: MetadataRouting<any, any>[] = [];
+  private cachedMaliciousDb:
+    | { packages: Set<string>; versions: Map<string, Set<string>> }
+    | null
+    | undefined = undefined;
 
   constructor(config: RegistryConfig) {
     this.config = config;
@@ -110,8 +127,49 @@ export abstract class RegistryProxy {
     res.redirect(302, this.buildUpstreamUrl(req));
   }
 
+  private getMaliciousDB(): {
+    packages: Set<string>;
+    versions: Map<string, Set<string>>;
+  } | null {
+    if (this.cachedMaliciousDb !== undefined) return this.cachedMaliciousDb;
+    try {
+      const content = readFileSync(
+        join(DATA_DIR, `${this.name}.json`),
+        'utf-8',
+      );
+      const raw = JSON.parse(content) as EcosystemOutput;
+      this.cachedMaliciousDb = {
+        packages: new Set(raw.maliciousPackages),
+        versions: new Map(
+          Object.entries(raw.maliciousVersions).map(([pkg, vs]) => [
+            pkg,
+            new Set(vs),
+          ]),
+        ),
+      };
+    } catch {
+      this.cachedMaliciousDb = null;
+    }
+    return this.cachedMaliciousDb;
+  }
+
   protected filterVersions(versions: VersionMetadata[]) {
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    return versions.filter((v) => v.published <= cutoffDate);
+    let filtered = versions.filter((v) => v.published <= cutoffDate);
+    if (filtered.length === 0) return [];
+
+    const packageName = filtered[0].packageName;
+    const db = this.getMaliciousDB();
+    if (db !== null) {
+      if (db.packages.has(packageName)) {
+        return [];
+      }
+      const maliciousVersionSet = db.versions.get(packageName);
+      if (maliciousVersionSet !== undefined) {
+        filtered = filtered.filter((v) => !maliciousVersionSet.has(v.version));
+      }
+    }
+
+    return filtered;
   }
 }

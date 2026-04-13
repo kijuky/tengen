@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { NpmRegistryProxy } from './npm.ts';
 import { makeHandle, responseBody } from './test-helpers.ts';
+
+vi.mock('node:fs', () => ({
+  readFileSync: vi.fn(),
+}));
+
+const mockReadFileSync = vi.mocked(readFileSync);
 
 vi.mock('axios', () => ({
   default: { get: vi.fn() },
@@ -203,5 +210,78 @@ describe('NpmRegistryProxy – metadata filtering', () => {
   it('proxies upstream non-200 status', async () => {
     const res = await handle('/lodash', { error: 'not found' }, 404);
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe('NpmRegistryProxy – malicious filtering', () => {
+  const MALICIOUS_DB = JSON.stringify({
+    maliciousPackages: ['evil-pkg'],
+    maliciousVersions: { 'bad-pkg': ['1.0.0'] },
+  });
+
+  let maliciousProxy: NpmRegistryProxy;
+  let maliciousHandle: ReturnType<typeof makeHandle>;
+
+  beforeEach(() => {
+    mockReadFileSync.mockReturnValue(MALICIOUS_DB);
+    maliciousProxy = new NpmRegistryProxy({
+      upstream: 'https://registry.npmjs.org',
+      delayMs: DELAY_MS,
+    });
+    maliciousHandle = makeHandle(maliciousProxy, vi.mocked(axios.get));
+  });
+
+  afterEach(() => {
+    mockReadFileSync.mockReset();
+  });
+
+  it('blocks all versions of a package listed in maliciousPackages', async () => {
+    const data = {
+      name: 'evil-pkg',
+      'dist-tags': { latest: '1.0.0' },
+      versions: { '1.0.0': {} },
+      time: {
+        created: '2023-01-01T00:00:00Z',
+        modified: '2024-01-01T00:00:00Z',
+        '1.0.0': '2024-01-01T00:00:00Z', // before cutoff → would pass delay filter
+      },
+    };
+    const res = await maliciousHandle('/evil-pkg', data);
+    const result = responseBody(res);
+    expect(Object.keys(result.versions as object)).toEqual([]);
+  });
+
+  it('blocks specific malicious versions while keeping safe ones', async () => {
+    const data = {
+      name: 'bad-pkg',
+      'dist-tags': { latest: '2.0.0' },
+      versions: { '1.0.0': {}, '2.0.0': {} },
+      time: {
+        created: '2023-01-01T00:00:00Z',
+        modified: '2024-01-10T00:00:00Z',
+        '1.0.0': '2024-01-01T00:00:00Z', // before cutoff but malicious → blocked
+        '2.0.0': '2024-01-10T00:00:00Z', // before cutoff and safe → allowed
+      },
+    };
+    const res = await maliciousHandle('/bad-pkg', data);
+    const result = responseBody(res);
+    expect(Object.keys(result.versions as object)).toEqual(['2.0.0']);
+    expect((result['dist-tags'] as Record<string, string>).latest).toBe('2.0.0');
+  });
+
+  it('does not filter packages absent from the malicious DB', async () => {
+    const data = {
+      name: 'safe-pkg',
+      'dist-tags': { latest: '1.0.0' },
+      versions: { '1.0.0': {} },
+      time: {
+        created: '2023-01-01T00:00:00Z',
+        modified: '2024-01-01T00:00:00Z',
+        '1.0.0': '2024-01-01T00:00:00Z',
+      },
+    };
+    const res = await maliciousHandle('/safe-pkg', data);
+    const result = responseBody(res);
+    expect(Object.keys(result.versions as object)).toEqual(['1.0.0']);
   });
 });

@@ -33,8 +33,10 @@ export class GoRegistryProxy extends RegistryProxy {
   ): Promise<VersionMetadata[]> {
     const origin = new URL(this.config.upstream).origin;
     const modulePath = req.path.slice(0, req.path.length - '/@v/list'.length);
+    const packageName = modulePath.slice(1);
     const infos = await fetchAllInfos(origin, modulePath, metadata);
     return infos.map((v) => ({
+      packageName,
       version: v.Version,
       published: new Date(v.Time),
     }));
@@ -42,6 +44,8 @@ export class GoRegistryProxy extends RegistryProxy {
 
   private async handleLatest(req: Request, res: Response): Promise<void> {
     const origin = new URL(this.config.upstream).origin;
+    const modulePath = req.path.slice(0, req.path.length - '/@latest'.length);
+    const packageName = modulePath.slice(1);
     const latestRes = await axios.get<GoVersionInfo>(
       this.buildUpstreamUrl(req),
       {
@@ -58,14 +62,13 @@ export class GoRegistryProxy extends RegistryProxy {
     }
     const latestInfo = latestRes.data;
     const [latestAllowed] = this.filterVersions([
-      { version: latestInfo.Version, published: new Date(latestInfo.Time) },
+      { packageName, version: latestInfo.Version, published: new Date(latestInfo.Time) },
     ]);
     if (latestAllowed) {
       res.status(200).json(latestInfo);
       return;
     }
     // Latest is too new — fetch full list and find newest allowed version
-    const modulePath = req.path.slice(0, req.path.length - '/@latest'.length);
     const listRes = await axios.get<string>(`${origin}${modulePath}/@v/list`, {
       responseType: 'text',
       validateStatus: () => true,
@@ -78,7 +81,7 @@ export class GoRegistryProxy extends RegistryProxy {
     const infos = await fetchAllInfos(origin, modulePath, listRes.data);
     const allowedSet = new Set(
       this.filterVersions(
-        infos.map((v) => ({ version: v.Version, published: new Date(v.Time) })),
+        infos.map((v) => ({ packageName, version: v.Version, published: new Date(v.Time) })),
       ).map((v) => v.version),
     );
     const allowedInfos = infos

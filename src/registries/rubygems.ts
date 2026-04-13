@@ -25,7 +25,12 @@ export class RubygemsRegistryProxy extends RegistryProxy {
     this.addMetadataRoute<RubyGemVersion[]>({
       condition: (req) =>
         req.path.startsWith('/api/v1/versions/') && req.path.endsWith('.json'),
-      getVersions: getVersions,
+      getVersions: (metadata, req) => {
+        const gemName = req.path
+          .slice('/api/v1/versions/'.length)
+          .replace(/\.json$/, '');
+        return getVersions(metadata, gemName);
+      },
       filterMetadata: async (metadata, allowedVersions) => {
         return metadata.filter((v) =>
           allowedVersions.some((av) => av.version === v.number),
@@ -90,12 +95,13 @@ export class RubygemsRegistryProxy extends RegistryProxy {
     if (response.status !== 200) {
       return [];
     }
-    return getVersions(response.data);
+    return getVersions(response.data, gemName);
   }
 }
 
-function getVersions(metadata: RubyGemVersion[]): VersionMetadata[] {
+function getVersions(metadata: RubyGemVersion[], gemName: string): VersionMetadata[] {
   return metadata.map((v) => ({
+    packageName: gemName,
     version: v.number,
     published: new Date(v.created_at),
   }));

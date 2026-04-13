@@ -465,8 +465,6 @@ async function expandRanges(db: MaliciousDb): Promise<void> {
 async function writeDb(db: MaliciousDb): Promise<void> {
   await mkdir(OUTPUT_DIR, { recursive: true });
 
-  const summary: Record<string, number> = {};
-
   for (const [eco, packages] of Object.entries(db).sort()) {
     const output: EcosystemOutput = {
       maliciousPackages: [],
@@ -481,15 +479,8 @@ async function writeDb(db: MaliciousDb): Promise<void> {
     }
     const outPath = join(OUTPUT_DIR, `${eco}.json`);
     await writeFile(outPath, JSON.stringify(output, null, 2), 'utf-8');
-    summary[eco] = Object.keys(packages).length;
-    process.stdout.write(`  Wrote ${outPath}  (${summary[eco]} packages)\n`);
+    process.stdout.write(`  Wrote ${outPath}  (${Object.keys(packages).length} packages)\n`);
   }
-
-  await writeFile(
-    join(OUTPUT_DIR, 'index.json'),
-    JSON.stringify(summary, null, 2),
-    'utf-8',
-  );
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

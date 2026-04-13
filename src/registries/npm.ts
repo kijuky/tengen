@@ -26,7 +26,11 @@ function getVersionMetadata(metadata: NpmPackageMetadata): VersionMetadata[] {
   for (const version of Object.keys(metadata.versions)) {
     const publishedStr = metadata.time[version];
     if (typeof publishedStr === 'string') {
-      versions.push({ version, published: new Date(publishedStr) });
+      versions.push({
+        packageName: metadata.name,
+        version,
+        published: new Date(publishedStr),
+      });
     }
   }
   return versions;

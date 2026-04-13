@@ -64,7 +64,9 @@ export class MavenRegistryProxy extends RegistryProxy {
       },
     );
     if (searchRes.status !== 200 || !searchRes.data?.response?.docs) return [];
+    const packageName = `${groupId}:${artifactId}`;
     return searchRes.data.response.docs.map((doc) => ({
+      packageName,
       version: doc.v,
       published: new Date(doc.timestamp),
     }));

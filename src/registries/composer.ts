@@ -37,11 +37,12 @@ export class ComposerRegistryProxy extends RegistryProxy {
         req.path.startsWith('/p2/') && req.path.endsWith('.json'),
       getVersions: (metadata) => {
         const versions: VersionMetadata[] = [];
-        for (const pkgVersions of Object.values(metadata.packages)) {
+        for (const [pkgName, pkgVersions] of Object.entries(metadata.packages)) {
           const expandedVersions = expandVersions(pkgVersions);
           for (const v of expandedVersions) {
             if (v.time) {
               versions.push({
+                packageName: pkgName,
                 version: v.version,
                 published: new Date(v.time),
               });

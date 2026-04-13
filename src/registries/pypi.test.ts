@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { PypiRegistryProxy } from './pypi.ts';
 import { makeHandle, makeReq, makeRes, responseBody } from './test-helpers.ts';
 
 vi.mock('axios', () => ({
   default: { get: vi.fn() },
 }));
+vi.mock('node:fs', () => ({
+  readFileSync: vi.fn(),
+}));
 
 import axios from 'axios';
+const mockReadFileSync = vi.mocked(readFileSync);
 
 const DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 const CUTOFF = new Date('2024-01-15T00:00:00Z');
@@ -386,5 +391,95 @@ describe('PypiRegistryProxy – passthrough', () => {
       302,
       'https://pypi.org/packages/requests-2.28.0-py3-none-any.whl',
     );
+  });
+});
+
+describe('PypiRegistryProxy – malicious filtering', () => {
+  const MALICIOUS_DB = JSON.stringify({
+    maliciousPackages: ['evil-pkg'],
+    maliciousVersions: { 'requests': ['2.28.0'] },
+  });
+
+  let maliciousProxy: PypiRegistryProxy;
+  let maliciousHandle: ReturnType<typeof makeHandle>;
+
+  beforeEach(() => {
+    mockReadFileSync.mockReturnValue(MALICIOUS_DB);
+    maliciousProxy = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+    });
+    maliciousHandle = makeHandle(maliciousProxy, vi.mocked(axios.get));
+  });
+
+  afterEach(() => {
+    mockReadFileSync.mockReset();
+  });
+
+  it('blocks all files of a fully malicious package (simple API)', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'evil-pkg',
+      versions: ['1.0.0'],
+      files: [makeSimpleFile('evil-pkg-1.0.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq('/simple/evil-pkg/', { accept: 'application/vnd.pypi.simple.v1+json' }),
+      res,
+    );
+    const result = responseBody(res);
+    expect((result['files'] as unknown[]).length).toBe(0);
+    expect((result['versions'] as unknown[]).length).toBe(0);
+  });
+
+  it('blocks specific malicious versions while keeping safe ones (simple API)', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0', '2.29.0'],
+      files: [
+        makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z'), // malicious → blocked
+        makeSimpleFile('requests-2.29.0.tar.gz', '2024-01-10T00:00:00Z'), // safe → allowed
+      ],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq('/simple/requests/', { accept: 'application/vnd.pypi.simple.v1+json' }),
+      res,
+    );
+    const result = responseBody(res);
+    const files = result['files'] as Record<string, unknown>[];
+    expect(files.length).toBe(1);
+    expect(files[0]['filename']).toBe('requests-2.29.0.tar.gz');
+  });
+
+  it('blocks all releases of a fully malicious package (JSON API)', async () => {
+    const data = {
+      info: { name: 'evil-pkg', version: '1.0.0' },
+      last_serial: 1,
+      releases: { '1.0.0': [makeMetadataFile('2024-01-01T00:00:00Z')] },
+      urls: [],
+    };
+    const res = await maliciousHandle('/pypi/evil-pkg/json', data);
+    const result = responseBody(res);
+    expect(Object.keys(result['releases'] as Record<string, unknown>)).toEqual([]);
+  });
+
+  it('blocks a specific malicious release while keeping safe ones (JSON API)', async () => {
+    const data = {
+      info: { name: 'requests', version: '2.29.0' },
+      last_serial: 1,
+      releases: {
+        '2.28.0': [makeMetadataFile('2024-01-01T00:00:00Z')], // malicious → blocked
+        '2.29.0': [makeMetadataFile('2024-01-10T00:00:00Z')], // safe → allowed
+      },
+      urls: [],
+    };
+    const res = await maliciousHandle('/pypi/requests/json', data);
+    const result = responseBody(res);
+    expect(Object.keys(result['releases'] as Record<string, unknown>)).toEqual(['2.29.0']);
   });
 });

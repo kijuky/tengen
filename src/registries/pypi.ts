@@ -108,6 +108,7 @@ function getSimpleApiVersions(
       .forEach((file) => {
         if (file['upload-time']) {
           versions.push({
+            packageName: metadata.name,
             version: ver,
             published: new Date(file['upload-time']),
             filename: file.filename,
@@ -173,7 +174,7 @@ function getPackageLevelVersions(metadata: PyPiMetadata): VersionMetadata[] {
       const t = new Date(f.upload_time_iso_8601);
       return t < min ? t : min;
     }, new Date(files[0].upload_time_iso_8601));
-    versions.push({ version, published: earliest });
+    versions.push({ packageName: metadata.info.name, version, published: earliest });
   }
   return versions;
 }

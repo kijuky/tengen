@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { GoRegistryProxy } from "./go.ts";
 import { makeHandle, makeReq, makeRes } from "./test-helpers.ts";
 
 vi.mock("axios", () => ({
   default: { get: vi.fn() },
 }));
+vi.mock("node:fs", () => ({
+  readFileSync: vi.fn(),
+}));
 
 import axios from "axios";
 const mockedGet = vi.mocked(axios.get);
+const mockReadFileSync = vi.mocked(readFileSync);
 
 const proxy = new GoRegistryProxy({
   upstream: "https://proxy.golang.org",
@@ -212,5 +217,86 @@ describe("GoRegistryProxy.handleRequest - passthrough", () => {
       302,
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.zip",
     );
+  });
+});
+
+describe("GoRegistryProxy – malicious filtering", () => {
+  const MALICIOUS_DB = JSON.stringify({
+    maliciousPackages: ["github.com/evil/module"],
+    maliciousVersions: { "github.com/foo/bar": ["v1.0.0"] },
+  });
+
+  let maliciousProxy: GoRegistryProxy;
+
+  beforeEach(() => {
+    mockReadFileSync.mockReturnValue(MALICIOUS_DB);
+    maliciousProxy = new GoRegistryProxy({
+      upstream: "https://proxy.golang.org",
+      delayMs: 7 * 24 * 60 * 60 * 1000,
+    });
+  });
+
+  afterEach(() => {
+    mockReadFileSync.mockReset();
+  });
+
+  it("returns 404 when the module is fully malicious (/@v/list)", async () => {
+    mockedGet
+      .mockResolvedValueOnce({ status: 200, data: "v1.0.0\n", headers: {} })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v1.0.0", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq("/github.com/evil/module/@v/list"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("blocks a specific malicious version while keeping safe ones (/@v/list)", async () => {
+    mockedGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: "v1.0.0\nv2.0.0\n",
+        headers: {},
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v1.0.0", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v2.0.0", Time: "2024-01-10T00:00:00Z" },
+        headers: {},
+      });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq("/github.com/foo/bar/@v/list"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(vi.mocked(res.send)).toHaveBeenCalledWith("v2.0.0\n");
+  });
+
+  it("returns 404 when the module is fully malicious (/@latest)", async () => {
+    // 1st call: /@latest → malicious version (before cutoff, but blocked by malicious filter)
+    // 2nd call: /@v/list fallback → empty list → no versions → 404
+    mockedGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v1.0.0", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      })
+      .mockResolvedValueOnce({ status: 200, data: "", headers: {} });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(
+      makeReq("/github.com/evil/module/@latest"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });
