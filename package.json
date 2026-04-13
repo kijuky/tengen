@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "description": "Package registry proxy with version delay filtering",
   "type": "module",
+  "bin": {
+    "tengen": "./src/tengen.ts"
+  },
   "scripts": {
-    "start": "node src/index.ts",
-    "dev": "node --watch src/index.ts",
+    "start": "node src/tengen.ts serve",
+    "dev": "node --watch src/tengen.ts serve",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:malicious-db": "node scripts/build-malicious-db.ts"
+    "build:malicious-db": "node src/tengen.ts build-malicious-db"
   },
   "dependencies": {
     "axios": "^1.14.0",

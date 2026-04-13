@@ -1,5 +1,5 @@
 import express from "express";
-import type { Config } from "./config.ts";
+import { loadConfig, type Config } from "./config.ts";
 import { MavenRegistryProxy } from "./registries/maven.ts";
 import { NpmRegistryProxy } from "./registries/npm.ts";
 import { PypiRegistryProxy } from "./registries/pypi.ts";
@@ -48,4 +48,17 @@ export function createServer(config: Config): express.Express {
   }
 
   return app;
+}
+
+export function startServer(argv: string[] = process.argv.slice(2)): void {
+  const config = loadConfig(argv);
+  const app = createServer(config);
+  app.listen(config.port, config.host, () => {
+    console.log(`tengen registry proxy started`);
+    for (const [name, url] of Object.entries(config.upstreams)) {
+      console.log(`  ${name.padEnd(10)}  ${url}`);
+    }
+    console.log(`  delay:      ${config.delayDays} day(s)`);
+    console.log(`  listening:  http://${config.host}:${config.port}`);
+  });
 }

@@ -17,7 +17,7 @@ npm install foo / pip install bar / gem install baz / ...
 ## Usage
 
 ```sh
-npm start -- [options]
+tengen serve [options]
 ```
 
 | Option                | Default                                | Description                                      |
@@ -71,14 +71,14 @@ Then point your package manager at `http://localhost:3000`. Each subdirectory un
 
 ## Supported registries
 
-| Registry  | Base path   | Package managers    | Upstream default                       |
-| --------- | ----------- | ------------------- | -------------------------------------- |
-| npm       | `/npm`      | npm, yarn, pnpm     | `https://registry.npmjs.org`           |
-| PyPI      | `/pypi`     | pip, poetry, uv     | `https://pypi.org`                     |
-| RubyGems  | `/rubygems` | gem, bundler        | `https://rubygems.org`                 |
-| Go module | `/go`       | go                  | `https://proxy.golang.org`             |
-| Composer  | `/composer` | composer            | `https://packagist.org`                |
-| Maven     | `/maven`    | maven, gradle       | `https://repo.maven.apache.org/maven2` |
+| Registry  | Base path   | Package managers | Upstream default                       |
+| --------- | ----------- | ---------------- | -------------------------------------- |
+| npm       | `/npm`      | npm, yarn, pnpm  | `https://registry.npmjs.org`           |
+| PyPI      | `/pypi`     | pip, poetry, uv  | `https://pypi.org`                     |
+| RubyGems  | `/rubygems` | gem, bundler     | `https://rubygems.org`                 |
+| Go module | `/go`       | go               | `https://proxy.golang.org`             |
+| Composer  | `/composer` | composer         | `https://packagist.org`                |
+| Maven     | `/maven`    | maven, gradle    | `https://repo.maven.apache.org/maven2` |
 
 ## Filtered paths per registry
 

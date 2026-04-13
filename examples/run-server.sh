@@ -6,4 +6,4 @@ DAYS=$(( (NOW_EPOCH - TARGET_EPOCH) / 86400 ))
 
 echo "Days until 2025-01-01: ${DAYS} -> starting server with -d ${DAYS}"
 
-cd "$(dirname "$0")/.." && node src/index.ts -d "$DAYS" -p 3000
+cd "$(dirname "$0")/.." && npm start -- -d "$DAYS" -p 3000

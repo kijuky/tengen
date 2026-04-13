@@ -15,14 +15,21 @@ import { fileURLToPath } from 'node:url';
 import { createGunzip } from 'node:zlib';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import type { EcosystemOutput } from '../types.ts';
 
 const REPO = 'ossf/malicious-packages';
 const OSV_BASE = 'osv/malicious';
 
-const SUPPORTED_ECOSYSTEMS = new Set(['go', 'maven', 'npm', 'pypi', 'rubygems']);
+const SUPPORTED_ECOSYSTEMS = new Set([
+  'go',
+  'maven',
+  'npm',
+  'pypi',
+  'rubygems',
+]);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_DIR = join(__dirname, '..', 'data', 'malicious');
+const OUTPUT_DIR = join(__dirname, '..', '..', 'data', 'malicious');
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,13 +67,6 @@ interface PackageEntry {
 
 type EcosystemDb = Record<string, PackageEntry>;
 type MaliciousDb = Record<string, EcosystemDb>;
-
-interface EcosystemOutput {
-  /** Packages where all versions are affected */
-  maliciousPackages: string[];
-  /** Packages with specific affected versions: { [name]: versions[] } */
-  maliciousVersions: Record<string, string[]>;
-}
 
 // ── Version comparison (ecosystem-agnostic) ──────────────────────────────────
 
@@ -427,7 +427,9 @@ async function expandRanges(db: MaliciousDb): Promise<void> {
     );
     if (toExpand.length === 0) continue;
 
-    process.stdout.write(`\nExpanding ranges for ${toExpand.length} ${eco} packages …\n`);
+    process.stdout.write(
+      `\nExpanding ranges for ${toExpand.length} ${eco} packages …\n`,
+    );
     let done = 0;
 
     for (let i = 0; i < toExpand.length; i += CONCURRENCY) {
@@ -466,7 +468,10 @@ async function writeDb(db: MaliciousDb): Promise<void> {
   const summary: Record<string, number> = {};
 
   for (const [eco, packages] of Object.entries(db).sort()) {
-    const output: EcosystemOutput = { maliciousPackages: [], maliciousVersions: {} };
+    const output: EcosystemOutput = {
+      maliciousPackages: [],
+      maliciousVersions: {},
+    };
     for (const [name, entry] of Object.entries(packages)) {
       if (entry.allVersions) {
         output.maliciousPackages.push(name);
@@ -489,7 +494,7 @@ async function writeDb(db: MaliciousDb): Promise<void> {
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+async function buildMaliciousDB(): Promise<void> {
   process.stdout.write('=== build-malicious-db ===\n');
 
   const db: MaliciousDb = {};
@@ -508,7 +513,4 @@ async function main(): Promise<void> {
   process.stdout.write('\nDone! Database written to data/malicious/\n');
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+export { buildMaliciousDB };
