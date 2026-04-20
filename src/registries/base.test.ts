@@ -17,49 +17,32 @@ const mockedGet = vi.mocked(axios.get);
 import { readFileSync } from "node:fs";
 const mockReadFileSync = vi.mocked(readFileSync);
 
-// Minimal concrete implementation for testing the base class
-class TestProxy extends RegistryProxy {
-  readonly name = "test";
+// ── Metadata routing ──────────────────────────────────────────────────────────
 
-  override async handleRequest(req: Request, res: Response): Promise<void> {
-    const upstreamBase = new URL(this.config.upstream);
-    const reqUrl = new URL(req.url, upstreamBase);
-    const upstreamUrl = `${upstreamBase.origin}${reqUrl.pathname}${reqUrl.search}`;
-    try {
-      if (!req.path.includes("/tarball/")) {
-        const response = await axios.get<unknown>(upstreamUrl, {
-          validateStatus: () => true,
-          maxRedirects: 0,
-        });
-        if (response.status !== 200) {
-          res.status(response.status).json(response.data);
-          return;
-        }
-        res.status(200).json(response.data);
-      } else {
-        await this.handlePassthrough(req, res);
-      }
-    } catch (err) {
-      if (!res.headersSent) {
-        res.status(502).json({ error: "Bad Gateway", message: String(err) });
-      }
-    }
+class MetadataTestProxy extends RegistryProxy {
+  readonly name = "meta-test";
+
+  override setRouting() {
+    this.addMetadataRoute({
+      condition: (req) => !req.path.includes("/tarball/"),
+      getVersions: () => [],
+      filterMetadata: (m) => m,
+    });
   }
 }
 
-const proxy = new TestProxy({
+const metaProxy = new MetadataTestProxy({
   upstream: "https://upstream.example.com",
   delayMs: 0,
 });
-
-const handle = makeHandle(proxy, mockedGet);
+const handle = makeHandle(metaProxy, mockedGet);
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("RegistryProxy.handleRequest – metadata requests", () => {
-  it("fetches upstream metadata and returns filtered result on 200", async () => {
+describe("RegistryProxy – metadata routing", () => {
+  it("fetches upstream and returns filtered metadata on 200", async () => {
     const data = { name: "pkg", versions: {}, time: {}, "dist-tags": {} };
     const res = await handle("/pkg", data, 200);
 
@@ -71,66 +54,14 @@ describe("RegistryProxy.handleRequest – metadata requests", () => {
     expect(res.json).toHaveBeenCalledWith(data);
   });
 
-  it("proxies non-200 status codes without filtering", async () => {
+  it("proxies non-200 status and body without filtering", async () => {
     const data = { error: "not_found", reason: "document not found" };
     const res = await handle("/nonexistent", data, 404);
 
     expect(res.status).toHaveBeenCalledWith(404);
-    expect(res.json).toHaveBeenCalledWith(data);
+    expect(res.send).toHaveBeenCalledWith(data);
   });
 
-  it("returns 502 Bad Gateway when upstream request throws", async () => {
-    mockedGet.mockRejectedValue(new Error("ECONNREFUSED"));
-
-    const res = makeRes();
-    await proxy.handleRequest(makeReq("/pkg"), res);
-
-    expect(res.status).toHaveBeenCalledWith(502);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: "Bad Gateway" }),
-    );
-  });
-
-  it("does not double-respond when headers are already sent on error", async () => {
-    mockedGet.mockRejectedValue(new Error("network error"));
-
-    const res = makeRes();
-    (res as unknown as Record<string, unknown>).headersSent = true;
-
-    await proxy.handleRequest(makeReq("/pkg"), res);
-
-    expect(res.status).not.toHaveBeenCalled();
-    expect(res.json).not.toHaveBeenCalled();
-  });
-});
-
-describe("RegistryProxy.handleRequest – passthrough requests", () => {
-  it("redirects to the upstream URL with 302", async () => {
-    const res = makeRes();
-    await proxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), res);
-
-    expect(res.redirect).toHaveBeenCalledWith(
-      302,
-      "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz",
-    );
-    expect(mockedGet).not.toHaveBeenCalled();
-  });
-
-  it("preserves query string in redirect URL", async () => {
-    const res = makeRes();
-    await proxy.handleRequest(
-      makeReq("/pkg/tarball/pkg-1.0.0.tgz?foo=bar"),
-      res,
-    );
-
-    expect(res.redirect).toHaveBeenCalledWith(
-      302,
-      "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz?foo=bar",
-    );
-  });
-});
-
-describe("RegistryProxy.handleRequest – header forwarding", () => {
   it("does not forward request headers to upstream", async () => {
     const data = { name: "pkg", versions: {}, time: {}, "dist-tags": {} };
     mockedGet.mockResolvedValue({ status: 200, data, headers: {} });
@@ -142,12 +73,38 @@ describe("RegistryProxy.handleRequest – header forwarding", () => {
       "x-custom-header": "should-not-forward",
     });
 
-    await proxy.handleRequest(req, makeRes());
+    await metaProxy.handleRequest(req, makeRes());
 
     const forwardedHeaders = mockedGet.mock.calls[0][1]?.headers as
       | Record<string, string>
       | undefined;
     expect(forwardedHeaders).toBeUndefined();
+  });
+});
+
+describe("RegistryProxy – passthrough", () => {
+  it("redirects to the upstream URL with 302", async () => {
+    const res = makeRes();
+    await metaProxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), res);
+
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz",
+    );
+    expect(mockedGet).not.toHaveBeenCalled();
+  });
+
+  it("preserves query string in redirect URL", async () => {
+    const res = makeRes();
+    await metaProxy.handleRequest(
+      makeReq("/pkg/tarball/pkg-1.0.0.tgz?foo=bar"),
+      res,
+    );
+
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz?foo=bar",
+    );
   });
 });
 
@@ -159,7 +116,9 @@ const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 
 class DownloadProxy extends RegistryProxy {
   readonly name = "dl-test";
-  readonly getVersionMetadataFn = vi.fn<() => VersionMetadata | null>().mockReturnValue(null);
+  readonly getVersionMetadataFn = vi
+    .fn<() => VersionMetadata | null>()
+    .mockReturnValue(null);
 
   override setRouting() {
     this.addDownloadRoute({
@@ -249,8 +208,29 @@ describe("RegistryProxy – download routing", () => {
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
+  it("returns 403 when the specific version is in the malicious DB", async () => {
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        maliciousPackages: [],
+        maliciousVersions: { pkg: ["1.0.0"] },
+      }),
+    );
+    const maliciousProxy = new DownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+    });
+    maliciousProxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: CUTOFF, // passes delay filter but version is malicious
+    });
+    const res = makeRes();
+    await maliciousProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
   it("returns 403 when getVersionMetadata returns null", async () => {
-    dlProxy.getVersionMetadataFn.mockReturnValue(null);
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -292,16 +272,30 @@ describe("RegistryProxy – routing order", () => {
   class DownloadFirstProxy extends RegistryProxy {
     readonly name = "order-test";
     override setRouting() {
-      this.addDownloadRoute({ condition: () => true, getVersionMetadata: () => allowedMeta });
-      this.addMetadataRoute({ condition: () => true, getVersions: () => [], filterMetadata: (m) => m });
+      this.addDownloadRoute({
+        condition: () => true,
+        getVersionMetadata: () => allowedMeta,
+      });
+      this.addMetadataRoute({
+        condition: () => true,
+        getVersions: () => [],
+        filterMetadata: (m) => m,
+      });
     }
   }
 
   class MetadataFirstProxy extends RegistryProxy {
     readonly name = "order-test";
     override setRouting() {
-      this.addMetadataRoute({ condition: () => true, getVersions: () => [], filterMetadata: (m) => m });
-      this.addDownloadRoute({ condition: () => true, getVersionMetadata: () => allowedMeta });
+      this.addMetadataRoute({
+        condition: () => true,
+        getVersions: () => [],
+        filterMetadata: (m) => m,
+      });
+      this.addDownloadRoute({
+        condition: () => true,
+        getVersionMetadata: () => allowedMeta,
+      });
     }
   }
 
