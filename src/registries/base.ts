@@ -33,7 +33,7 @@ export interface DownloadRouting<
   /**
    * Extract the VersionMetadata for the requested download.
    * Passed to filterVersions to check delay and malicious DB.
-   * Return null to skip filtering and passthrough directly.
+   * Return null to block the request (treated the same as a version that fails filtering).
    */
   getVersionMetadata: (
     req: Request,
@@ -66,16 +66,18 @@ export interface MetadataRouting<
   ) => void;
 }
 
-/**
- * Base class for registry proxies.
- *
- * To add a new registry (e.g. PyPI, RubyGems), extend this class and override
- * handleRequest(req, res) to implement registry-specific routing and filtering.
- */
 type Route =
   | ({ kind: 'metadata' } & MetadataRouting<any, any>)
   | ({ kind: 'download' } & DownloadRouting<any>);
 
+/**
+ * Base class for registry proxies.
+ *
+ * To add a new registry, extend this class, override `setRouting()`, and register
+ * routes with `addMetadataRoute()` or `addDownloadRoute()`. For special-case
+ * behaviour, override `handleRequest()` and call `super.handleRequest()` for
+ * the default routing.
+ */
 export abstract class RegistryProxy {
   /** The human-readable name of this registry (e.g. "npm", "pypi") */
   abstract readonly name: string;
