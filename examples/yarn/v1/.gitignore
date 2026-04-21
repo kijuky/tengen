@@ -1,2 +1,3 @@
 .yarn/
+.yarn-cache
 yarn.lock

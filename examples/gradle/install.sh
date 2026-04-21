@@ -1,2 +1,2 @@
 #!/bin/sh
-gradle dependencies
+GRADLE_USER_HOME=$(pwd)/.gradle gradle dependencies
