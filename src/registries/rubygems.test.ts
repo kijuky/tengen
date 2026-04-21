@@ -73,11 +73,12 @@ describe('RubygemsRegistryProxy – routing', () => {
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it('redirects non-metadata paths as passthrough', async () => {
-    const res = await handle('/gems/rails-7.0.0.gem', []);
+  it('redirects non-metadata, non-download paths as passthrough', async () => {
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/quick/Marshal.4.8/rails-7.0.0.gemspec.rz'), res);
     expect(res.redirect).toHaveBeenCalledWith(
       302,
-      'https://rubygems.org/gems/rails-7.0.0.gem',
+      'https://rubygems.org/quick/Marshal.4.8/rails-7.0.0.gemspec.rz',
     );
   });
 
@@ -278,6 +279,54 @@ describe('RubygemsRegistryProxy – /info/{name}', () => {
     const res = await handleInfo('unknown-gem', 'not found', 404, null, 404);
 
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
+  beforeEach(() => {
+    mockedGet.mockReset();
+  });
+
+  it('allows download when version passes filter and redirects to upstream', async () => {
+    const res = await handle('/gems/rails-7.0.0.gem', [
+      makeVersion('7.0.0', '2024-01-01T00:00:00Z'), // before cutoff → allowed
+    ]);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/rails-7.0.0.gem',
+    );
+  });
+
+  it('blocks download when version is after cutoff', async () => {
+    const res = await handle('/gems/rails-7.1.0.gem', [
+      makeVersion('7.1.0', '2024-02-01T00:00:00Z'), // after cutoff → blocked
+    ]);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('blocks download when upstream returns non-200', async () => {
+    const res = await handle('/gems/unknown-1.0.0.gem', null, 404);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('blocks download when requested version is not found in upstream response', async () => {
+    const res = await handle('/gems/rails-7.0.0.gem', [
+      makeVersion('7.1.0', '2024-01-01T00:00:00Z'), // different version
+    ]);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('handles gem names with hyphens correctly', async () => {
+    const res = await handle('/gems/aws-sdk-s3-1.0.0.gem', [
+      makeVersion('1.0.0', '2024-01-01T00:00:00Z'),
+    ]);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/aws-sdk-s3-1.0.0.gem',
+    );
   });
 });
 

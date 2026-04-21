@@ -13,7 +13,7 @@ const DATA_DIR = join(
   'malicious',
 );
 
-export interface RegistryConfig {
+interface RegistryConfig {
   /** Upstream registry base URL */
   upstream: string;
   /** Filter out versions published within this many milliseconds */
@@ -26,7 +26,7 @@ export interface VersionMetadata {
   published: Date;
 }
 
-export interface DownloadRouting<
+interface DownloadRouting<
   VersionMetadataType extends VersionMetadata = VersionMetadata,
 > {
   condition: (req: Request) => boolean;
@@ -38,14 +38,11 @@ export interface DownloadRouting<
   getVersionMetadata: (
     req: Request,
   ) => Promise<VersionMetadataType | null> | VersionMetadataType | null;
-  /** Called when the version is blocked (default: 403 JSON response) */
+  /** Called when the version is blocked (default: 404 JSON response) */
   respondBlocked?: (res: Response, req: Request) => void;
 }
 
-export interface MetadataRouting<
-  MetadataType,
-  VersionMetadataType = VersionMetadata,
-> {
+interface MetadataRouting<MetadataType, VersionMetadataType = VersionMetadata> {
   condition: (req: Request) => boolean;
   requestUpstream?: (
     originalReq: Request,
@@ -66,23 +63,24 @@ export interface MetadataRouting<
   ) => void;
 }
 
-type Route =
-  | ({ kind: 'metadata' } & MetadataRouting<any, any>)
-  | ({ kind: 'download' } & DownloadRouting<any>);
+interface CustomRouting {
+  condition: (req: Request) => boolean;
+  handle: (req: Request, res: Response) => Promise<void> | void;
+}
 
 /**
  * Base class for registry proxies.
  *
  * To add a new registry, extend this class, override `setRouting()`, and register
  * routes with `addMetadataRoute()` or `addDownloadRoute()`. For special-case
- * behaviour, override `handleRequest()` and call `super.handleRequest()` for
- * the default routing.
+ * behaviour, add additional routes in `setRouting()` with custom `requestUpstream`,
+ * `filterMetadata`, and `respond` callbacks.
  */
 export abstract class RegistryProxy {
   /** The human-readable name of this registry (e.g. "npm", "pypi") */
   abstract readonly name: string;
   protected readonly config: RegistryConfig;
-  private readonly routing: Route[] = [];
+  private readonly routing: CustomRouting[] = [];
   private cachedMaliciousDb:
     | { packages: Set<string>; versions: Map<string, Set<string>> }
     | null
@@ -98,13 +96,25 @@ export abstract class RegistryProxy {
   protected addMetadataRoute<T, U extends VersionMetadata = VersionMetadata>(
     route: MetadataRouting<T, U>,
   ) {
-    this.routing.push({ kind: 'metadata', ...route });
+    this.routing.push({
+      condition: route.condition,
+      handle: async (req, res) =>
+        await this.handleMetadataRoute(route, req, res),
+    });
   }
 
   protected addDownloadRoute<U extends VersionMetadata = VersionMetadata>(
     route: DownloadRouting<U>,
   ) {
-    this.routing.push({ kind: 'download', ...route });
+    this.routing.push({
+      condition: route.condition,
+      handle: async (req, res) =>
+        await this.handleDownloadRoute(route, req, res),
+    });
+  }
+
+  protected addCustomRoute(route: CustomRouting) {
+    this.routing.push(route);
   }
 
   /** Build the full upstream URL from an incoming request. */
@@ -118,23 +128,19 @@ export abstract class RegistryProxy {
   async handleRequest(req: Request, res: Response) {
     for (const route of this.routing) {
       if (!route.condition(req)) continue;
-      if (route.kind === 'metadata') {
-        await this.handleMetadataRoute(route, req, res);
-      } else {
-        await this.handleDownloadRoute(route, req, res);
-      }
+      await route.handle(req, res);
       return;
     }
     this.handlePassthrough(req, res);
   }
 
   private async handleMetadataRoute(
-    route: { kind: 'metadata' } & MetadataRouting<any, any>,
+    route: MetadataRouting<any, any>,
     req: Request,
     res: Response,
   ) {
-    route.requestUpstream ??= () =>
-      axios.get(this.buildUpstreamUrl(req), {
+    route.requestUpstream ??= (origReq) =>
+      axios.get(this.buildUpstreamUrl(origReq), {
         validateStatus: () => true,
         maxRedirects: 0,
       });
@@ -162,16 +168,19 @@ export abstract class RegistryProxy {
   }
 
   private async handleDownloadRoute(
-    route: { kind: 'download' } & DownloadRouting<any>,
+    route: DownloadRouting<any>,
     req: Request,
     res: Response,
   ) {
     const versionMeta = await route.getVersionMetadata(req);
-    if (versionMeta === null || this.filterVersions([versionMeta]).length === 0) {
+    if (
+      versionMeta === null ||
+      this.filterVersions([versionMeta]).length === 0
+    ) {
       if (route.respondBlocked) {
         route.respondBlocked(res, req);
       } else {
-        res.status(403).json({ error: 'Version not allowed' });
+        res.status(404).json({ error: 'Version not allowed' });
       }
       return;
     }

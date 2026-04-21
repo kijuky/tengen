@@ -1,11 +1,11 @@
-import express from "express";
-import { loadConfig, type Config } from "./config.ts";
-import { MavenRegistryProxy } from "./registries/maven.ts";
-import { NpmRegistryProxy } from "./registries/npm.ts";
-import { PypiRegistryProxy } from "./registries/pypi.ts";
-import { RubygemsRegistryProxy } from "./registries/rubygems.ts";
-import { GoRegistryProxy } from "./registries/go.ts";
-import { ComposerRegistryProxy } from "./registries/composer.ts";
+import express from 'express';
+import { loadConfig, type Config } from './config.ts';
+import { MavenRegistryProxy } from './registries/maven.ts';
+import { NpmRegistryProxy } from './registries/npm.ts';
+import { PypiRegistryProxy } from './registries/pypi.ts';
+import { RubygemsRegistryProxy } from './registries/rubygems.ts';
+import { GoRegistryProxy } from './registries/go.ts';
+import { ComposerRegistryProxy } from './registries/composer.ts';
 
 export function createServer(config: Config): express.Express {
   const app = express();
@@ -26,7 +26,7 @@ export function createServer(config: Config): express.Express {
       const start = Date.now();
       console.log(`[${registry.name}] ${req.method} ${req.path}`);
 
-      res.on("finish", () => {
+      res.on('finish', () => {
         const ms = Date.now() - start;
         console.log(
           `[${registry.name}] ${req.method} ${req.path} -> ${res.statusCode} (${ms}ms)`,
@@ -41,7 +41,7 @@ export function createServer(config: Config): express.Express {
         if (!res.headersSent) {
           res
             .status(500)
-            .json({ error: "Internal Server Error", message: String(err) });
+            .json({ error: 'Internal Server Error', message: String(err) });
         }
       });
     });

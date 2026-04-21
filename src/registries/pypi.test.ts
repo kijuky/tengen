@@ -73,12 +73,18 @@ describe('PypiRegistryProxy – routing', () => {
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it('redirects other paths as passthrough', async () => {
-    const res = await handle('/packages/requests-2.28.0.tar.gz', {});
-    expect(res.redirect).toHaveBeenCalledWith(
-      302,
-      'https://pypi.org/packages/requests-2.28.0.tar.gz',
-    );
+  it('routes /packages/ paths to download handler', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/requests-2.28.0.tar.gz'), res);
+    expect(res.send).not.toHaveBeenCalled();
+    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/requests-2.28.0.tar.gz');
   });
 });
 
@@ -186,6 +192,39 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
   it('proxies upstream non-200 status', async () => {
     const res = await handle('/simple/requests/', { error: 'not found' }, 404);
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('rewrites file URLs to proxy-relative paths in JSON response', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/simple/requests/', { accept: 'application/vnd.pypi.simple.v1+json' }),
+      res,
+    );
+    const result = responseBody(res);
+    const files = result['files'] as Record<string, unknown>[];
+    expect(files[0]['url']).toBe('/pypi/packages/requests-2.28.0.tar.gz');
+  });
+
+  it('rewrites file URLs to proxy-relative paths in HTML response', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/simple/requests/'), res);
+    const html = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(html).toContain('href="/pypi/packages/requests-2.28.0.tar.gz"');
+    expect(html).not.toContain('files.pythonhosted.org');
   });
 });
 
@@ -376,21 +415,114 @@ describe('PypiRegistryProxy – JSON API version-specific (/pypi/{name}/{version
   });
 });
 
-describe('PypiRegistryProxy – passthrough', () => {
-  it('redirects .tar.gz artifact', async () => {
-    const res = await handle('/packages/requests-2.28.0.tar.gz', {});
+describe('PypiRegistryProxy – download route (/packages/...)', () => {
+  it('redirects .tar.gz artifact when version is within delay', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/requests-2.28.0.tar.gz'), res);
+    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/requests-2.28.0.tar.gz');
+  });
+
+  it('redirects .whl artifact when version is within delay', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0-py3-none-any.whl', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/requests-2.28.0-py3-none-any.whl'), res);
+    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/requests-2.28.0-py3-none-any.whl');
+  });
+
+  it('redirects artifact at nested /packages/{a}/{b}/{c}/{file} path', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/ab/cd/ef123/requests-2.28.0.tar.gz'), res);
+    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/ab/cd/ef123/requests-2.28.0.tar.gz');
+  });
+
+  it('returns 404 when version is too new', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.29.0'],
+      files: [makeSimpleFile('requests-2.29.0.tar.gz', '2024-02-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/requests-2.29.0.tar.gz'), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when file is not found in Simple API', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: [],
+      files: [],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/requests-2.28.0.tar.gz'), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('returns 404 when Simple API returns non-200', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ status: 404, data: {}, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/packages/requests-2.28.0.tar.gz'), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('redirects .whl.metadata artifact by looking up the corresponding .whl in Simple API', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'boto3',
+      versions: ['1.35.90'],
+      files: [makeSimpleFile('boto3-1.35.90-py3-none-any.whl', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/packages/5c/f9/abc/boto3-1.35.90-py3-none-any.whl.metadata'),
+      res,
+    );
     expect(res.redirect).toHaveBeenCalledWith(
       302,
-      'https://pypi.org/packages/requests-2.28.0.tar.gz',
+      'https://pypi.org/packages/5c/f9/abc/boto3-1.35.90-py3-none-any.whl.metadata',
     );
   });
 
-  it('redirects .whl artifact', async () => {
-    const res = await handle('/packages/requests-2.28.0-py3-none-any.whl', {});
-    expect(res.redirect).toHaveBeenCalledWith(
-      302,
-      'https://pypi.org/packages/requests-2.28.0-py3-none-any.whl',
+  it('returns 404 for .whl.metadata when version is too new', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'boto3',
+      versions: ['1.35.90'],
+      files: [makeSimpleFile('boto3-1.35.90-py3-none-any.whl', '2024-02-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/packages/5c/f9/abc/boto3-1.35.90-py3-none-any.whl.metadata'),
+      res,
     );
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 });
 

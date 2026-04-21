@@ -122,6 +122,65 @@ describe('ComposerRegistryProxy – packages.json URL rewriting', () => {
   });
 });
 
+describe('ComposerRegistryProxy – download routing', () => {
+  it('allows download when version is before cutoff and redirects to upstream', async () => {
+    const data = {
+      packages: {
+        'vendor/package': [
+          makeVersion('1.0.0', '1.0.0.0', '2024-01-01T00:00:00Z'), // before cutoff → allowed
+        ],
+      },
+    };
+    const res = await handle('/dist/vendor/package/1.0.0/abc123.zip', data);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://packagist.org/dist/vendor/package/1.0.0/abc123.zip',
+    );
+  });
+
+  it('blocks download when version is after cutoff', async () => {
+    const data = {
+      packages: {
+        'vendor/package': [
+          makeVersion('1.0.0', '1.0.0.0', '2024-02-01T00:00:00Z'), // after cutoff → blocked
+        ],
+      },
+    };
+    const res = await handle('/dist/vendor/package/1.0.0/abc123.zip', data);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('blocks download when version is not found in metadata', async () => {
+    const data = {
+      packages: {
+        'vendor/package': [
+          makeVersion('2.0.0', '2.0.0.0', '2024-01-01T00:00:00Z'),
+        ],
+      },
+    };
+    const res = await handle('/dist/vendor/package/1.0.0/abc123.zip', data);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('blocks download when upstream metadata returns non-200', async () => {
+    const res = await handle(
+      '/dist/vendor/package/1.0.0/abc123.zip',
+      { error: 'not found' },
+      404,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('passes through non-dist paths unchanged', async () => {
+    const res = await handle('/downloads/vendor/package/1.0.0.zip', {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://packagist.org/downloads/vendor/package/1.0.0.zip',
+    );
+  });
+});
+
 describe('ComposerRegistryProxy – package metadata filtering', () => {
   it('filters out versions published after cutoff date', async () => {
     const data = {

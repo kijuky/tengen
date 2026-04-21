@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { MavenRegistryProxy, parseMavenPath } from "./maven.ts";
+import { MavenRegistryProxy } from "./maven.ts";
 import { makeReq, makeRes } from "./test-helpers.ts";
 
 vi.mock("axios", () => ({
@@ -23,7 +23,7 @@ const BEFORE_CUTOFF = new Date("2024-01-01T00:00:00Z").getTime();
 const AT_CUTOFF = CUTOFF.getTime();
 const AFTER_CUTOFF = new Date("2024-02-01T00:00:00Z").getTime();
 
-type SearchDoc = { v: string; timestamp: number };
+type DepsDevVersionEntry = { versionKey: { version: string }; publishedAt: string };
 
 let proxy: MavenRegistryProxy;
 
@@ -62,18 +62,18 @@ ${versionTags}
 
 // Maven makes two sequential axios.get calls for metadata paths:
 //   1. upstream maven-metadata.xml
-//   2. Maven Central Search API for version timestamps
+//   2. deps.dev package API for version timestamps
 async function handle(
   path: string,
   xml: string,
-  searchDocs: SearchDoc[] = [],
+  versions: DepsDevVersionEntry[] = [],
   upstreamStatus = 200,
 ): Promise<ReturnType<typeof makeRes>> {
   vi.mocked(axios.get)
     .mockResolvedValueOnce({ status: upstreamStatus, data: xml, headers: {} })
     .mockResolvedValueOnce({
       status: 200,
-      data: { response: { docs: searchDocs, numFound: searchDocs.length } },
+      data: { versions },
       headers: {},
     });
   const res = makeRes();
@@ -81,28 +81,44 @@ async function handle(
   return res;
 }
 
-describe("parseMavenPath", () => {
-  it("parses groupId and artifactId from path", () => {
-    expect(parseMavenPath("/com/example/mylib/maven-metadata.xml")).toEqual({
-      groupId: "com.example",
-      artifactId: "mylib",
-    });
+describe("MavenRegistryProxy – routing", () => {
+  it("redirects paths with fewer than 4 segments (not download/metadata) as passthrough", async () => {
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/archetype-catalog.xml"), res);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://repo1.maven.org/maven2/archetype-catalog.xml",
+    );
   });
 
-  it("handles deeply nested groupIds", () => {
-    expect(
-      parseMavenPath(
-        "/org/springframework/boot/spring-boot/maven-metadata.xml",
-      ),
-    ).toEqual({
-      groupId: "org.springframework.boot",
-      artifactId: "spring-boot",
-    });
+  it("constructs correct packageName for deeply nested groupId", async () => {
+    const xml = makeXml(["1.0.0"]);
+    await handle("/org/springframework/boot/spring-boot/maven-metadata.xml", xml, [
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
+    ]);
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith(
+      "https://api.deps.dev/v3alpha/systems/maven/packages/org.springframework.boot:spring-boot",
+      expect.any(Object),
+    );
+  });
+
+  it("responds to maven-metadata.xml with XML content-type (not streamed)", async () => {
+    const xml = makeXml(["1.0.0"]);
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
+    ]);
+    expect(res.type).toHaveBeenCalledWith("application/xml");
+    expect(res.send).toHaveBeenCalled();
   });
 });
 
-describe("MavenRegistryProxy – routing", () => {
-  it("redirects JARs and POMs as passthrough", async () => {
+describe("MavenRegistryProxy – download routing", () => {
+  it("redirects JARs for allowed versions", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 200,
+      data: { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
+      headers: {},
+    });
     const res = makeRes();
     await proxy.handleRequest(
       makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
@@ -114,13 +130,46 @@ describe("MavenRegistryProxy – routing", () => {
     );
   });
 
-  it("responds to maven-metadata.xml with XML content-type (not streamed)", async () => {
-    const xml = makeXml(["1.0.0"]);
-    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
-      { v: "1.0.0", timestamp: BEFORE_CUTOFF },
-    ]);
-    expect(res.type).toHaveBeenCalledWith("application/xml");
-    expect(res.send).toHaveBeenCalled();
+  it("blocks JARs for versions published after the cutoff", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 200,
+      data: { versionKey: { version: "2.0.0" }, publishedAt: new Date(AFTER_CUTOFF).toISOString() },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/2.0.0/mylib-2.0.0.jar"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("blocks JARs when deps.dev returns no result", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 404,
+      data: {},
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("also checks POMs and sources JARs", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 200,
+      data: { versionKey: { version: "1.0.0" }, publishedAt: new Date(AFTER_CUTOFF).toISOString() },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.pom"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });
 
@@ -128,8 +177,8 @@ describe("MavenRegistryProxy – metadata filtering", () => {
   it("removes versions published after the cutoff", async () => {
     const xml = makeXml(["1.0.0", "2.0.0"]);
     const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
-      { v: "1.0.0", timestamp: BEFORE_CUTOFF }, // allowed
-      { v: "2.0.0", timestamp: AFTER_CUTOFF }, // filtered
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() }, // allowed
+      { versionKey: { version: "2.0.0" }, publishedAt: new Date(AFTER_CUTOFF).toISOString() }, // filtered
     ]);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).toContain("<version>1.0.0</version>");
@@ -139,7 +188,7 @@ describe("MavenRegistryProxy – metadata filtering", () => {
   it("includes versions published exactly at the cutoff", async () => {
     const xml = makeXml(["1.0.0"]);
     const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
-      { v: "1.0.0", timestamp: AT_CUTOFF },
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(AT_CUTOFF).toISOString() },
     ]);
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
@@ -149,9 +198,9 @@ describe("MavenRegistryProxy – metadata filtering", () => {
   it("updates <release> and <latest> to the latest allowed version", async () => {
     const xml = makeXml(["1.0.0", "1.1.0", "2.0.0"], "2.0.0", "2.0.0");
     const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
-      { v: "1.0.0", timestamp: BEFORE_CUTOFF },
-      { v: "1.1.0", timestamp: BEFORE_CUTOFF + 1000 }, // newest allowed
-      { v: "2.0.0", timestamp: AFTER_CUTOFF },
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
+      { versionKey: { version: "1.1.0" }, publishedAt: new Date(BEFORE_CUTOFF + 1000).toISOString() }, // newest allowed
+      { versionKey: { version: "2.0.0" }, publishedAt: new Date(AFTER_CUTOFF).toISOString() },
     ]);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).toContain("<release>1.1.0</release>");
@@ -161,7 +210,7 @@ describe("MavenRegistryProxy – metadata filtering", () => {
   it("returns 404 when all versions are filtered out", async () => {
     const xml = makeXml(["2.0.0"]);
     const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
-      { v: "2.0.0", timestamp: AFTER_CUTOFF },
+      { versionKey: { version: "2.0.0" }, publishedAt: new Date(AFTER_CUTOFF).toISOString() },
     ]);
     expect(res.status).toHaveBeenCalledWith(404);
   });
@@ -203,7 +252,7 @@ describe("MavenRegistryProxy – checksum endpoints", () => {
     const res = await handle(
       "/com/example/mylib/maven-metadata.xml.sha1",
       xml,
-      [{ v: "1.0.0", timestamp: BEFORE_CUTOFF }],
+      [{ versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() }],
     );
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
@@ -214,7 +263,7 @@ describe("MavenRegistryProxy – checksum endpoints", () => {
     const xml = makeXml(["1.0.0"]);
     const expected = createHash("md5").update(xml).digest("hex");
     const res = await handle("/com/example/mylib/maven-metadata.xml.md5", xml, [
-      { v: "1.0.0", timestamp: BEFORE_CUTOFF },
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
     ]);
     expect(res.status).toHaveBeenCalledWith(200);
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
@@ -226,7 +275,7 @@ describe("MavenRegistryProxy – checksum endpoints", () => {
     const res = await handle(
       "/com/example/mylib/maven-metadata.xml.sha1",
       xml,
-      [{ v: "2.0.0", timestamp: AFTER_CUTOFF }],
+      [{ versionKey: { version: "2.0.0" }, publishedAt: new Date(AFTER_CUTOFF).toISOString() }],
     );
     expect(res.status).toHaveBeenCalledWith(404);
   });
@@ -261,7 +310,7 @@ describe("MavenRegistryProxy – malicious filtering", () => {
       .mockResolvedValueOnce({ status: 200, data: xml, headers: {} })
       .mockResolvedValueOnce({
         status: 200,
-        data: { response: { docs: [{ v: "1.0.0", timestamp: BEFORE_CUTOFF }], numFound: 1 } },
+        data: { versions: [{ versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() }] },
         headers: {},
       });
     const res = makeRes();
@@ -279,13 +328,10 @@ describe("MavenRegistryProxy – malicious filtering", () => {
       .mockResolvedValueOnce({
         status: 200,
         data: {
-          response: {
-            docs: [
-              { v: "1.0.0", timestamp: BEFORE_CUTOFF }, // malicious → blocked
-              { v: "2.0.0", timestamp: BEFORE_CUTOFF + 1000 }, // safe → allowed
-            ],
-            numFound: 2,
-          },
+          versions: [
+            { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() }, // malicious → blocked
+            { versionKey: { version: "2.0.0" }, publishedAt: new Date(BEFORE_CUTOFF + 1000).toISOString() }, // safe → allowed
+          ],
         },
         headers: {},
       });

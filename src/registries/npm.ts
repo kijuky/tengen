@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { RegistryProxy, type VersionMetadata } from './base.ts';
 
 interface NpmPackageMetadata {
@@ -18,7 +19,59 @@ export class NpmRegistryProxy extends RegistryProxy {
       getVersions: getVersionMetadata,
       filterMetadata,
     });
+
+    this.addDownloadRoute({
+      condition: (req) => req.path.includes('/-/'),
+      getVersionMetadata: async (req) => {
+        const parsed = parseDownloadUrl(req.path);
+        if (!parsed) return null;
+        const { packageName, version } = parsed;
+
+        const upstream = this.config.upstream.replace(/\/$/, '');
+        const response = await axios.get<NpmPackageMetadata>(
+          `${upstream}/${packageName}`,
+          { validateStatus: () => true, maxRedirects: 0 },
+        );
+        if (response.status !== 200) return null;
+
+        const publishedStr = response.data.time?.[version];
+        if (typeof publishedStr !== 'string') return null;
+
+        return { packageName, version, published: new Date(publishedStr) };
+      },
+    });
   }
+}
+
+/**
+ * Parse an npm tarball download path into package name and version.
+ *
+ * Handles both regular and scoped packages:
+ *   /lodash/-/lodash-4.17.21.tgz         → { packageName: 'lodash',      version: '4.17.21' }
+ *   /@babel/core/-/core-7.0.0.tgz        → { packageName: '@babel/core', version: '7.0.0' }
+ */
+function parseDownloadUrl(
+  path: string,
+): { packageName: string; version: string } | null {
+  const separatorIdx = path.indexOf('/-/');
+  if (separatorIdx === -1) return null;
+
+  const packageName = path.slice(1, separatorIdx); // strip leading '/'
+  const filename = path.slice(separatorIdx + 3); // after '/-/'
+
+  if (!filename.endsWith('.tgz')) return null;
+
+  const baseName = packageName.includes('/')
+    ? packageName.slice(packageName.lastIndexOf('/') + 1)
+    : packageName;
+
+  const nameWithVersion = filename.slice(0, -4); // remove '.tgz'
+  if (!nameWithVersion.startsWith(`${baseName}-`)) return null;
+
+  const version = nameWithVersion.slice(baseName.length + 1);
+  if (!version) return null;
+
+  return { packageName, version };
 }
 
 function getVersionMetadata(metadata: NpmPackageMetadata): VersionMetadata[] {

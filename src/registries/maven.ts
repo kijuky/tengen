@@ -3,17 +3,18 @@ import axios from 'axios';
 import { createHash } from 'node:crypto';
 import { RegistryProxy, type VersionMetadata } from './base.ts';
 
-interface MavenSearchDoc {
-  v: string;
-  timestamp: number;
-  [key: string]: unknown;
+interface DepsDevVersionEntry {
+  versionKey: { system: string; name: string; version: string };
+  publishedAt: string;
 }
 
-interface MavenSearchResponse {
-  response: {
-    docs: MavenSearchDoc[];
-    numFound: number;
-  };
+interface DepsDevPackageResponse {
+  versions: DepsDevVersionEntry[];
+}
+
+interface DepsDevVersionResponse {
+  versionKey: { system: string; name: string; version: string };
+  publishedAt: string;
 }
 
 export class MavenRegistryProxy extends RegistryProxy {
@@ -24,16 +25,43 @@ export class MavenRegistryProxy extends RegistryProxy {
    *   /{groupId/as/path}/{artifactId}/maven-metadata.xml        → filtered XML metadata
    *   /{groupId/as/path}/{artifactId}/maven-metadata.xml.sha1  → SHA1 of filtered XML
    *   /{groupId/as/path}/{artifactId}/maven-metadata.xml.md5   → MD5 of filtered XML
-   *   everything else (JARs, POMs, sources, other checksums)    → passthrough
+   *   /{groupId/as/path}/{artifactId}/{version}/{file}          → download check (403 if version blocked)
+   *   everything else                                           → passthrough
    */
   public setRouting() {
     this.addMetadataRoute<string>({
       condition: (req) => isMavenMetadataPath(req.path),
       requestUpstream: (req) => this.fetchUpstreamXml(req),
       getVersions: (metadata, req) => this.fetchVersions(metadata, req),
-      filterMetadata: (metadata, allowedVersions) => this.filterXml(metadata, allowedVersions),
-      respond: (res, filteredMetadata, req) => this.respondWithMetadata(res, filteredMetadata, req),
+      filterMetadata: (metadata, allowedVersions) =>
+        this.filterXml(metadata, allowedVersions),
+      respond: (res, filteredMetadata, req) =>
+        this.respondWithMetadata(res, filteredMetadata, req),
     });
+
+    this.addDownloadRoute({
+      condition: (req) => isMavenDownloadPath(req.path),
+      getVersionMetadata: (req) => this.getDownloadVersionMetadata(req),
+    });
+  }
+
+  private async getDownloadVersionMetadata(
+    req: Request,
+  ): Promise<VersionMetadata | null> {
+    const parsed = parseMavenDownloadPath(req.path);
+    if (!parsed) return null;
+    const { groupId, artifactId, version } = parsed;
+    const packageName = `${groupId}:${artifactId}`;
+    const res = await axios.get<DepsDevVersionResponse>(
+      `https://api.deps.dev/v3alpha/systems/maven/packages/${packageName}/versions/${encodeURIComponent(version)}`,
+      { validateStatus: () => true, maxRedirects: 0 },
+    );
+    if (res.status !== 200 || !res.data?.publishedAt) return null;
+    return {
+      packageName,
+      version: res.data.versionKey.version,
+      published: new Date(res.data.publishedAt),
+    };
   }
 
   private async fetchUpstreamXml(req: Request) {
@@ -45,51 +73,55 @@ export class MavenRegistryProxy extends RegistryProxy {
     });
   }
 
-  private async fetchVersions(metadata: string, req: Request): Promise<VersionMetadata[]> {
+  private async fetchVersions(
+    metadata: string,
+    req: Request,
+  ): Promise<VersionMetadata[]> {
     // Group-level metadata lists plugins/artifacts without <versions> — skip search
     if (!metadata.includes('<versions>')) return [];
 
     const { groupId, artifactId } = parseMavenPath(getXmlPath(req.path));
-    const searchRes = await axios.get<MavenSearchResponse>(
-      'https://search.maven.org/solrsearch/select',
-      {
-        params: {
-          q: `g:"${groupId}" AND a:"${artifactId}"`,
-          core: 'gav',
-          rows: 500,
-          wt: 'json',
-        },
-        validateStatus: () => true,
-        maxRedirects: 0,
-      },
-    );
-    if (searchRes.status !== 200 || !searchRes.data?.response?.docs) return [];
     const packageName = `${groupId}:${artifactId}`;
-    return searchRes.data.response.docs.map((doc) => ({
+    const res = await axios.get<DepsDevPackageResponse>(
+      `https://api.deps.dev/v3alpha/systems/maven/packages/${packageName}`,
+      { validateStatus: () => true, maxRedirects: 0 },
+    );
+    if (res.status !== 200 || !res.data?.versions) return [];
+    return res.data.versions.map((v) => ({
       packageName,
-      version: doc.v,
-      published: new Date(doc.timestamp),
+      version: v.versionKey.version,
+      published: new Date(v.publishedAt),
     }));
   }
 
-  private filterXml(metadata: string, allowedVersions: VersionMetadata[]): string {
+  private filterXml(
+    metadata: string,
+    allowedVersions: VersionMetadata[],
+  ): string {
     if (!metadata.includes('<versions>')) return metadata;
-    const latest = allowedVersions.reduce<VersionMetadata | null>(
-      (acc, v) => (!acc || v.published > acc.published ? v : acc),
-      null,
-    )?.version ?? '';
+    const latest =
+      allowedVersions.reduce<VersionMetadata | null>(
+        (acc, v) => (!acc || v.published > acc.published ? v : acc),
+        null,
+      )?.version ?? '';
     const allowed = new Set(allowedVersions.map((v) => v.version));
     return filterMavenMetadataXml(metadata, allowed, latest) ?? '';
   }
 
-  private respondWithMetadata(res: Response, filteredMetadata: string, req: Request): void {
+  private respondWithMetadata(
+    res: Response,
+    filteredMetadata: string,
+    req: Request,
+  ): void {
     if (filteredMetadata === '') {
       res.status(404).json({ error: 'Not found' });
       return;
     }
-    const suffix = req.path.endsWith('.sha1') ? 'sha1'
-      : req.path.endsWith('.md5') ? 'md5'
-      : null;
+    const suffix = req.path.endsWith('.sha1')
+      ? 'sha1'
+      : req.path.endsWith('.md5')
+        ? 'md5'
+        : null;
     if (suffix) {
       const hash = createHash(suffix).update(filteredMetadata).digest('hex');
       res.status(200).type('text/plain').send(hash);
@@ -107,6 +139,31 @@ function isMavenMetadataPath(path: string): boolean {
   );
 }
 
+/** Returns true for version-specific artifact paths: /{groupId}/{artifactId}/{version}/{file} */
+function isMavenDownloadPath(path: string): boolean {
+  return path.split('/').filter(Boolean).length >= 4;
+}
+
+/**
+ * Parse groupId, artifactId, and version from a Maven artifact download path.
+ *
+ * Example:
+ *   /com/example/mylib/1.0.0/mylib-1.0.0.jar
+ *   -> groupId: "com.example", artifactId: "mylib", version: "1.0.0"
+ */
+function parseMavenDownloadPath(path: string): {
+  groupId: string;
+  artifactId: string;
+  version: string;
+} | null {
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length < 4) return null;
+  const version = parts[parts.length - 2];
+  const artifactId = parts[parts.length - 3];
+  const groupId = parts.slice(0, -3).join('.');
+  return { groupId, artifactId, version };
+}
+
 function getXmlPath(path: string): string {
   if (path.endsWith('.sha1')) return path.slice(0, -5);
   if (path.endsWith('.md5')) return path.slice(0, -4);
@@ -120,7 +177,7 @@ function getXmlPath(path: string): string {
  *   /com/example/mylib/maven-metadata.xml
  *   -> groupId: "com.example", artifactId: "mylib"
  */
-export function parseMavenPath(path: string): {
+function parseMavenPath(path: string): {
   groupId: string;
   artifactId: string;
 } {
@@ -137,7 +194,7 @@ export function parseMavenPath(path: string): {
  * Updates <versions>, <release>, <latest>, and <lastUpdated> fields.
  * Returns null when no versions remain after filtering.
  */
-export function filterMavenMetadataXml(
+function filterMavenMetadataXml(
   xml: string,
   allowedVersions: Set<string>,
   latestVersion: string,

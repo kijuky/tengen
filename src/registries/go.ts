@@ -11,20 +11,39 @@ export class GoRegistryProxy extends RegistryProxy {
   readonly name = 'go';
 
   public setRouting() {
+    this.addCustomRoute({
+      condition: (req) => req.path.endsWith('/@latest'),
+      handle: (req, res) => this.handleLatest(req, res),
+    });
+
     this.addMetadataRoute<string>({
       condition: (req) => req.path.endsWith('/@v/list'),
       getVersions: (metadata, req) => this.getListVersions(metadata, req),
       filterMetadata: filterListText,
       respond: respondList,
     });
+
+    this.addDownloadRoute({
+      condition: (req) => /\/@v\/[^/]+\.(zip|mod)$/.test(req.path),
+      getVersionMetadata: (req) => this.getDownloadVersionMetadata(req),
+    });
   }
 
-  async handleRequest(req: Request, res: Response) {
-    if (req.path.endsWith('/@latest')) {
-      await this.handleLatest(req, res);
-      return;
-    }
-    await super.handleRequest(req, res);
+  private async getDownloadVersionMetadata(
+    req: Request,
+  ): Promise<VersionMetadata | null> {
+    const origin = new URL(this.config.upstream).origin;
+    const match = req.path.match(/^(.+)\/@v\/([^/]+)\.(zip|mod)$/);
+    if (!match) return null;
+    const [, modulePath, version] = match;
+    const packageName = modulePath.slice(1);
+    const info = await fetchGoInfo(origin, modulePath, version);
+    if (!info) return null;
+    return {
+      packageName,
+      version: info.Version,
+      published: new Date(info.Time),
+    };
   }
 
   private async getListVersions(
@@ -62,7 +81,11 @@ export class GoRegistryProxy extends RegistryProxy {
     }
     const latestInfo = latestRes.data;
     const [latestAllowed] = this.filterVersions([
-      { packageName, version: latestInfo.Version, published: new Date(latestInfo.Time) },
+      {
+        packageName,
+        version: latestInfo.Version,
+        published: new Date(latestInfo.Time),
+      },
     ]);
     if (latestAllowed) {
       res.status(200).json(latestInfo);
@@ -81,7 +104,11 @@ export class GoRegistryProxy extends RegistryProxy {
     const infos = await fetchAllInfos(origin, modulePath, listRes.data);
     const allowedSet = new Set(
       this.filterVersions(
-        infos.map((v) => ({ packageName, version: v.Version, published: new Date(v.Time) })),
+        infos.map((v) => ({
+          packageName,
+          version: v.Version,
+          published: new Date(v.Time),
+        })),
       ).map((v) => v.version),
     );
     const allowedInfos = infos

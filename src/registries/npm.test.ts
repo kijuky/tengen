@@ -47,11 +47,46 @@ describe('NpmRegistryProxy – routing', () => {
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it('redirects tarball paths as passthrough', async () => {
-    const res = await handle('/lodash/-/lodash-4.17.21.tgz', {});
+  it('redirects tarball when version is before cutoff', async () => {
+    const res = await handle('/lodash/-/lodash-4.17.21.tgz', {
+      name: 'lodash',
+      versions: { '4.17.21': {} },
+      time: { '4.17.21': '2024-01-01T00:00:00Z' }, // before cutoff
+      'dist-tags': { latest: '4.17.21' },
+    });
     expect(res.redirect).toHaveBeenCalledWith(
       302,
       'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
+    );
+  });
+
+  it('blocks tarball when version is after cutoff', async () => {
+    const res = await handle('/lodash/-/lodash-4.17.21.tgz', {
+      name: 'lodash',
+      versions: { '4.17.21': {} },
+      time: { '4.17.21': '2024-02-01T00:00:00Z' }, // after cutoff
+      'dist-tags': { latest: '4.17.21' },
+    });
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('blocks tarball when metadata fetch returns non-200', async () => {
+    const res = await handle('/lodash/-/lodash-4.17.21.tgz', {}, 404);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it('redirects scoped package tarball when version is before cutoff', async () => {
+    const res = await handle('/@babel/core/-/core-7.0.0.tgz', {
+      name: '@babel/core',
+      versions: { '7.0.0': {} },
+      time: { '7.0.0': '2024-01-01T00:00:00Z' }, // before cutoff
+      'dist-tags': { latest: '7.0.0' },
+    });
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://registry.npmjs.org/@babel/core/-/core-7.0.0.tgz',
     );
   });
 });

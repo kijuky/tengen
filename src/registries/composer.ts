@@ -32,6 +32,11 @@ export class ComposerRegistryProxy extends RegistryProxy {
   readonly name = 'composer';
 
   public setRouting() {
+    this.addCustomRoute({
+      condition: (req) => req.path === '/packages.json',
+      handle: (req, res) => this.handleRootMetadataRequest(req, res),
+    });
+
     this.addMetadataRoute<ComposerPackagesResponse>({
       condition: (req) =>
         req.path.startsWith('/p2/') && req.path.endsWith('.json'),
@@ -53,21 +58,31 @@ export class ComposerRegistryProxy extends RegistryProxy {
       },
       filterMetadata: filterComposerPackages,
     });
-  }
 
-  /**
-   * Routes requests:
-   *   /packages.json                     → registry root (URL rewrite)
-   *   /p2/{vendor}/{package}.json        → metadata (filtered)
-   *   /p2/{vendor}/{package}~dev.json    → metadata (filtered)
-   *   everything else                    → passthrough
-   */
-  override async handleRequest(req: Request, res: Response): Promise<void> {
-    if (req.path === '/packages.json') {
-      await this.handleRootMetadataRequest(req, res);
-      return;
-    }
-    return super.handleRequest(req, res);
+    this.addDownloadRoute({
+      condition: (req) => req.path.startsWith('/dist/'),
+      getVersionMetadata: async (req) => {
+        const parsed = parseDownloadUrl(req.path);
+        if (!parsed) return null;
+        const { packageName, version } = parsed;
+
+        const upstream = this.config.upstream.replace(/\/$/, '');
+        const response = await axios.get<ComposerPackagesResponse>(
+          `${upstream}/p2/${packageName}.json`,
+          { validateStatus: () => true, maxRedirects: 0 },
+        );
+        if (response.status !== 200) return null;
+
+        const pkgVersions = response.data.packages[packageName];
+        if (!pkgVersions) return null;
+
+        const expanded = expandVersions(pkgVersions);
+        const found = expanded.find((v) => v.version === version);
+        if (!found?.time) return null;
+
+        return { packageName, version, published: new Date(found.time) };
+      },
+    });
   }
 
   private async handleRootMetadataRequest(
@@ -84,6 +99,21 @@ export class ComposerRegistryProxy extends RegistryProxy {
     const rewrited = rewriteRootPackages(root, this.name);
     res.status(response.status).json(rewrited);
   }
+}
+
+/**
+ * Parse a Packagist dist download path into package name and version.
+ *
+ * Packagist dist URL format:
+ *   /dist/{vendor}/{package}/{version}/{hash}.zip
+ *   → { packageName: 'vendor/package', version: '{version}' }
+ */
+function parseDownloadUrl(
+  path: string,
+): { packageName: string; version: string } | null {
+  const match = path.match(/^\/dist\/([^/]+\/[^/]+)\/([^/]+)\/[^/]+\.zip$/);
+  if (!match) return null;
+  return { packageName: match[1], version: match[2] };
 }
 
 /**

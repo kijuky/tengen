@@ -176,7 +176,7 @@ describe("RegistryProxy – download routing", () => {
     );
   });
 
-  it("returns 403 when the version is too recent", async () => {
+  it("returns 404 when the version is too recent", async () => {
     dlProxy.getVersionMetadataFn.mockReturnValue({
       packageName: "pkg",
       version: "2.0.0",
@@ -184,12 +184,12 @@ describe("RegistryProxy – download routing", () => {
     });
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/pkg/-/pkg-2.0.0.tgz"), res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: "Version not allowed" });
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("returns 403 when the package is in the malicious DB", async () => {
+  it("returns 404 when the package is in the malicious DB", async () => {
     mockReadFileSync.mockReturnValue(
       JSON.stringify({ maliciousPackages: ["pkg"], maliciousVersions: {} }),
     );
@@ -204,11 +204,11 @@ describe("RegistryProxy – download routing", () => {
     });
     const res = makeRes();
     await maliciousProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(404);
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("returns 403 when the specific version is in the malicious DB", async () => {
+  it("returns 404 when the specific version is in the malicious DB", async () => {
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
         maliciousPackages: [],
@@ -226,18 +226,18 @@ describe("RegistryProxy – download routing", () => {
     });
     const res = makeRes();
     await maliciousProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(404);
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("returns 403 when getVersionMetadata returns null", async () => {
+  it("returns 404 when getVersionMetadata returns null", async () => {
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
-    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.status).toHaveBeenCalledWith(404);
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
-  it("calls custom respondBlocked instead of default 403 when version is blocked", async () => {
+  it("calls custom respondBlocked instead of default 404 when version is blocked", async () => {
     const customProxy = new CustomBlockProxy({
       upstream: "https://upstream.example.com",
       delayMs: DELAY_MS,

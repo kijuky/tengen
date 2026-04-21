@@ -44,10 +44,10 @@ export class PypiRegistryProxy extends RegistryProxy {
 
   /**
    * Routes:
-   *   /simple/{name}/             → Simple API (HTML or JSON)
+   *   /simple/{name}/             → Simple API (HTML or JSON); file URLs are rewritten to proxy-relative paths
    *   /pypi/{name}/json           → JSON API metadata (package-level)
    *   /pypi/{name}/{version}/json → JSON API metadata (version-specific)
-   *   everything else             → binary artifact passthrough
+   *   /packages/...               → download route (version-filtered then passthrough)
    */
   public setRouting() {
     this.addMetadataRoute<SimpleApiMetadata, PypiVersionMetadataType>({
@@ -68,18 +68,19 @@ export class PypiRegistryProxy extends RegistryProxy {
       getVersions: (metadata) => getSimpleApiVersions(metadata),
       filterMetadata: filterSimpleApiMetadata,
       respond: (res, filtered, req) => {
+        const rewritten = rewriteFileUrls(filtered, '/' + this.name);
         if (
           req.headers.accept?.includes('application/vnd.pypi.simple.v1+json')
         ) {
           res
             .status(200)
             .setHeader('content-type', 'application/vnd.pypi.simple.v1+json')
-            .json(filtered);
+            .json(rewritten);
         } else {
           res
             .status(200)
             .setHeader('content-type', 'text/html')
-            .send(toSimpleApiHtml(filtered));
+            .send(toSimpleApiHtml(rewritten));
         }
       },
     });
@@ -88,6 +89,42 @@ export class PypiRegistryProxy extends RegistryProxy {
         req.path.startsWith('/pypi/') && req.path.endsWith('/json'),
       getVersions: getPackageLevelVersions,
       filterMetadata: filterPackageLevelMetadata,
+    });
+    this.addDownloadRoute<PypiVersionMetadataType>({
+      condition: (req) => req.path.startsWith('/packages/'),
+      getVersionMetadata: async (req) => {
+        const filename = req.path.split('/').pop();
+        if (!filename) return null;
+
+        const parsed = parseDownloadFilename(filename);
+        if (!parsed) return null;
+        const { packageName, version } = parsed;
+
+        const response = await axios.get<SimpleApiMetadata>(
+          `${this.config.upstream.replace(/\/$/, '')}/simple/${packageName}/`,
+          {
+            validateStatus: () => true,
+            maxRedirects: 0,
+            headers: { Accept: 'application/vnd.pypi.simple.v1+json' },
+          },
+        );
+        if (response.status !== 200) return null;
+
+        const lookupFilename = filename.endsWith('.whl.metadata')
+          ? filename.slice(0, -'.metadata'.length)
+          : filename;
+        const file = response.data.files?.find(
+          (f) => f.filename === lookupFilename,
+        );
+        if (!file?.['upload-time']) return null;
+
+        return {
+          packageName,
+          version,
+          published: new Date(file['upload-time'] as string),
+          filename,
+        };
+      },
     });
   }
 }
@@ -163,6 +200,82 @@ function toSimpleApiHtml(data: SimpleApiMetadata): string {
   ].join('\n');
 }
 
+// ── Download route (/packages/...) ──────────────────────────────────────────
+
+/**
+ * Rewrite file URLs in a Simple API response to proxy-relative paths so that
+ * client downloads are intercepted by the download route instead of going
+ * directly to files.pythonhosted.org.
+ *
+ *   https://files.pythonhosted.org/packages/.../foo-1.0.whl#sha256=abc
+ *   → /packages/.../foo-1.0.whl#sha256=abc
+ */
+function rewriteFileUrls(
+  data: SimpleApiMetadata,
+  urlPrefix: string,
+): SimpleApiMetadata {
+  return {
+    ...data,
+    files: data.files.map((f) => {
+      try {
+        const u = new URL(f.url);
+        return { ...f, url: urlPrefix + u.pathname + u.hash };
+      } catch {
+        return f;
+      }
+    }),
+  };
+}
+
+/**
+ * Parse a PyPI filename into package name and version.
+ *
+ * Handles wheels and source distributions:
+ *   requests-2.28.0-py3-none-any.whl → { packageName: 'requests', version: '2.28.0' }
+ *   some_package-1.0.0.tar.gz        → { packageName: 'some-package', version: '1.0.0' }
+ */
+function parseDownloadFilename(
+  filename: string,
+): { packageName: string; version: string } | null {
+  // Wheel: {name}-{version}(-{build})?-{python}-{abi}-{platform}.whl or .whl.metadata
+  if (filename.endsWith('.whl.metadata') || filename.endsWith('.whl')) {
+    const base = filename.endsWith('.whl.metadata')
+      ? filename.slice(0, -13)
+      : filename.slice(0, -4);
+    const dashIdx = base.indexOf('-');
+    if (dashIdx === -1) return null;
+    const packageName = base.slice(0, dashIdx).toLowerCase().replace(/_/g, '-');
+    const version = base.slice(dashIdx + 1).split('-')[0];
+    if (!version) return null;
+    return { packageName, version };
+  }
+
+  // Source dist: {name}-{version}.tar.gz or {name}-{version}.zip
+  let base: string;
+  if (filename.endsWith('.tar.gz')) {
+    base = filename.slice(0, -7);
+  } else if (filename.endsWith('.zip')) {
+    base = filename.slice(0, -4);
+  } else {
+    return null;
+  }
+
+  // Find the version: first dash-separated component starting with a digit
+  const parts = base.split('-');
+  for (let i = 1; i < parts.length; i++) {
+    if (/^\d/.test(parts[i])) {
+      const packageName = parts
+        .slice(0, i)
+        .join('-')
+        .toLowerCase()
+        .replace(/_/g, '-');
+      const version = parts.slice(i).join('-');
+      return { packageName, version };
+    }
+  }
+  return null;
+}
+
 // ── Package-level JSON API (/pypi/{name}/json) ───────────────────────────────
 
 function getPackageLevelVersions(metadata: PyPiMetadata): VersionMetadata[] {
@@ -174,7 +287,11 @@ function getPackageLevelVersions(metadata: PyPiMetadata): VersionMetadata[] {
       const t = new Date(f.upload_time_iso_8601);
       return t < min ? t : min;
     }, new Date(files[0].upload_time_iso_8601));
-    versions.push({ packageName: metadata.info.name, version, published: earliest });
+    versions.push({
+      packageName: metadata.info.name,
+      version,
+      published: earliest,
+    });
   }
   return versions;
 }

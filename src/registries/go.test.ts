@@ -202,21 +202,53 @@ describe("GoRegistryProxy.handleRequest - passthrough", () => {
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.info",
     );
   });
+});
 
-  it("redirects .mod requests", async () => {
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.mod", {});
+describe("GoRegistryProxy.handleRequest - download (.zip/.mod)", () => {
+  it("redirects .mod requests when version is within cutoff", async () => {
+    mockedGet.mockResolvedValueOnce({
+      status: 200,
+      data: { Version: "v1.0.0", Time: "2024-01-01T00:00:00Z" },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/v1.0.0.mod"), res);
     expect(res.redirect).toHaveBeenCalledWith(
       302,
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.mod",
     );
   });
 
-  it("redirects .zip requests", async () => {
-    const res = await handle("/github.com/foo/bar/@v/v1.0.0.zip", {});
+  it("redirects .zip requests when version is within cutoff", async () => {
+    mockedGet.mockResolvedValueOnce({
+      status: 200,
+      data: { Version: "v1.0.0", Time: "2024-01-01T00:00:00Z" },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/v1.0.0.zip"), res);
     expect(res.redirect).toHaveBeenCalledWith(
       302,
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.zip",
     );
+  });
+
+  it("returns 404 when version is after cutoff", async () => {
+    mockedGet.mockResolvedValueOnce({
+      status: 200,
+      data: { Version: "v1.1.0", Time: "2024-02-01T00:00:00Z" },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/v1.1.0.zip"), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("returns 404 when .info fetch fails", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("network error"));
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/v1.0.0.zip"), res);
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });
 
