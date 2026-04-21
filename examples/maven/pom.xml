@@ -6,6 +6,17 @@
   <groupId>com.example</groupId>
   <artifactId>tengen-maven-example</artifactId>
   <version>1.0-SNAPSHOT</version>
+
+  <repositories>
+    <repository>
+      <id>central</id>
+      <url>http://localhost:3000/maven/</url>
+      <snapshots>
+          <enabled>false</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+  
   <dependencies>
     <dependency>
       <groupId>org.apache.commons</groupId>

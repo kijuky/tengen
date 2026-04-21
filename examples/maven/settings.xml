@@ -3,11 +3,4 @@
           xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
                               https://maven.apache.org/xsd/settings-1.0.0.xsd">
   <localRepository>./vendor</localRepository>
-  <mirrors>
-    <mirror>
-      <id>tengen</id>
-      <mirrorOf>*</mirrorOf>
-      <url>http://localhost:3000/maven</url>
-    </mirror>
-  </mirrors>
 </settings>
