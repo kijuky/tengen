@@ -113,6 +113,13 @@ export abstract class RegistryProxy {
     });
   }
 
+  protected addPassthroughRoute(condition: (req: Request) => boolean) {
+    this.routing.push({
+      condition,
+      handle: (req, res) => this.handlePassthrough(req, res),
+    });
+  }
+
   protected addCustomRoute(route: CustomRouting) {
     this.routing.push(route);
   }

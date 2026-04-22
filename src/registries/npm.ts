@@ -21,7 +21,7 @@ export class NpmRegistryProxy extends RegistryProxy {
     });
 
     this.addDownloadRoute({
-      condition: (req) => req.path.includes('/-/'),
+      condition: (req) => req.path.includes('/-/') && !req.path.startsWith('/-/'),
       getVersionMetadata: async (req) => {
         const parsed = parseDownloadUrl(req.path);
         if (!parsed) return null;
@@ -114,25 +114,33 @@ async function filterMetadata(
   return metadata;
 }
 
+function majorVersion(version: string): string | null {
+  const major = version.split('.')[0];
+  return major !== undefined && major !== '' ? major : null;
+}
+
 function filterDistTags(
   distTags: Record<string, string>,
   allowedVersions: VersionMetadata[],
 ): Record<string, string> {
-  // Pre-compute the latest allowed version by publish date, used as fallback
-  const latestAllowedVersion = allowedVersions.sort((a, b) => {
-    return b.published.getTime() - a.published.getTime();
-  })[0];
+  const sortedByDate = [...allowedVersions].sort(
+    (a, b) => b.published.getTime() - a.published.getTime(),
+  );
 
   const allowedVersionsSet = new Set(allowedVersions.map((v) => v.version));
   const result: Record<string, string> = {};
   for (const [tag, version] of Object.entries(distTags)) {
     if (allowedVersionsSet.has(version)) {
       result[tag] = version;
-    } else if (tag == 'latest' && latestAllowedVersion !== undefined) {
-      // Point the tag to the newest version that passed the delay filter
-      result[tag] = latestAllowedVersion.version;
-    } else {
-      delete distTags[tag];
+    } else if (tag === 'latest' && sortedByDate.length > 0) {
+      // Prefer the newest allowed version within the same major version as the
+      // original latest; fall back to the newest overall if none match.
+      const originalMajor = majorVersion(version);
+      const sameMajor =
+        originalMajor !== null
+          ? sortedByDate.find((v) => majorVersion(v.version) === originalMajor)
+          : undefined;
+      result[tag] = (sameMajor ?? sortedByDate[0]).version;
     }
   }
   return result;

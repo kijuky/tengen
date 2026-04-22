@@ -77,6 +77,15 @@ describe('NpmRegistryProxy – routing', () => {
     expect(res.redirect).not.toHaveBeenCalled();
   });
 
+  it('passes through search API path without blocking', async () => {
+    const res = await handle('/-/v1/search', {});
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://registry.npmjs.org/-/v1/search',
+    );
+    expect(res.status).not.toHaveBeenCalledWith(404);
+  });
+
   it('redirects scoped package tarball when version is before cutoff', async () => {
     const res = await handle('/@babel/core/-/core-7.0.0.tgz', {
       name: '@babel/core',
@@ -224,6 +233,45 @@ describe('NpmRegistryProxy – metadata filtering', () => {
     const result = responseBody(res);
     expect((result['dist-tags'] as Record<string, string>).latest).toBe('1.0.0');
     expect((result['dist-tags'] as Record<string, string>).beta).toBeUndefined();
+  });
+
+  it('prefers same-major versions when latest is filtered (cross-major fallback)', async () => {
+    const data = {
+      name: 'pkg',
+      'dist-tags': { latest: '2.1.0' }, // major 2, filtered
+      versions: { '2.0.0': {}, '1.9.0': {}, '1.8.0': {} },
+      time: {
+        created: '2023-01-01T00:00:00Z',
+        modified: '2024-02-01T00:00:00Z',
+        '2.0.0': '2024-01-05T00:00:00Z', // allowed, same major as latest
+        '1.9.0': '2024-01-10T00:00:00Z', // allowed, different major, newer date
+        '1.8.0': '2024-01-01T00:00:00Z', // allowed, different major
+        '2.1.0': '2024-02-01T00:00:00Z', // filtered
+      },
+    };
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    // Must pick 2.0.0 (same major as original latest=2.1.0), not 1.9.0 (newer date but different major)
+    expect((result['dist-tags'] as Record<string, string>).latest).toBe('2.0.0');
+  });
+
+  it('falls back to newest-by-date when no same-major versions are allowed', async () => {
+    const data = {
+      name: 'pkg',
+      'dist-tags': { latest: '3.0.0' }, // major 3, filtered, no other v3
+      versions: { '1.5.0': {}, '2.0.0': {} },
+      time: {
+        created: '2023-01-01T00:00:00Z',
+        modified: '2024-02-01T00:00:00Z',
+        '1.5.0': '2024-01-01T00:00:00Z', // allowed
+        '2.0.0': '2024-01-10T00:00:00Z', // allowed, newer
+        '3.0.0': '2024-02-01T00:00:00Z', // filtered
+      },
+    };
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    // No v3.x allowed → fall back to newest overall (2.0.0)
+    expect((result['dist-tags'] as Record<string, string>).latest).toBe('2.0.0');
   });
 
   it('drops the latest dist-tag when all versions are filtered', async () => {
