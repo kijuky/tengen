@@ -195,7 +195,13 @@ export abstract class RegistryProxy {
   }
 
   protected handlePassthrough(req: Request, res: Response): void {
-    res.redirect(302, this.buildUpstreamUrl(req));
+    const url = this.buildUpstreamUrl(req);
+    // Use 307 for non-GET/HEAD requests so the client preserves the original
+    // HTTP method (e.g. POST for npm audit). 302 allows clients to switch to
+    // GET, which causes upstream to return 405 Method Not Allowed.
+    const status =
+      req.method === 'GET' || req.method === 'HEAD' ? 302 : 307;
+    res.redirect(status, url);
   }
 
   private getMaliciousDB(): {
