@@ -16,6 +16,8 @@ export interface Config {
   };
   /** Versions published within this many days are excluded from responses */
   delayDays: number;
+  /** Path to a single combined malicious DB JSON file */
+  maliciousDbPath: string;
 }
 
 const OPTIONS = {
@@ -67,6 +69,11 @@ const OPTIONS = {
     default: "7",
     description: "Exclude versions published within this many days",
   },
+  "malicious-db-path": {
+    type: "string" as const,
+    default: "",
+    description: "Path to the malicious DB JSON file (built automatically into tmpdir when omitted)",
+  },
   help: {
     type: "boolean" as const,
     description: "Show this help message",
@@ -107,5 +114,6 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
       maven: values["maven-upstream"] as string,
     },
     delayDays: parseFloat(values["delay-days"] as string),
+    maliciousDbPath: values["malicious-db-path"] as string,
   };
 }

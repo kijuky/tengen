@@ -34,6 +34,7 @@ class MetadataTestProxy extends RegistryProxy {
 const metaProxy = new MetadataTestProxy({
   upstream: "https://upstream.example.com",
   delayMs: 0,
+  maliciousDbPath: "/dev/null",
 });
 const handle = makeHandle(metaProxy, mockedGet);
 
@@ -155,6 +156,7 @@ describe("RegistryProxy – download routing", () => {
     dlProxy = new DownloadProxy({
       upstream: "https://upstream.example.com",
       delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
     });
   });
 
@@ -191,11 +193,12 @@ describe("RegistryProxy – download routing", () => {
 
   it("returns 404 when the package is in the malicious DB", async () => {
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ maliciousPackages: ["pkg"], maliciousVersions: {} }),
+      JSON.stringify({ "dl-test": { maliciousPackages: ["pkg"], maliciousVersions: {} } }),
     );
     const maliciousProxy = new DownloadProxy({
       upstream: "https://upstream.example.com",
       delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
     });
     maliciousProxy.getVersionMetadataFn.mockReturnValue({
       packageName: "pkg",
@@ -211,13 +214,13 @@ describe("RegistryProxy – download routing", () => {
   it("returns 404 when the specific version is in the malicious DB", async () => {
     mockReadFileSync.mockReturnValue(
       JSON.stringify({
-        maliciousPackages: [],
-        maliciousVersions: { pkg: ["1.0.0"] },
+        "dl-test": { maliciousPackages: [], maliciousVersions: { pkg: ["1.0.0"] } },
       }),
     );
     const maliciousProxy = new DownloadProxy({
       upstream: "https://upstream.example.com",
       delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
     });
     maliciousProxy.getVersionMetadataFn.mockReturnValue({
       packageName: "pkg",
@@ -241,6 +244,7 @@ describe("RegistryProxy – download routing", () => {
     const customProxy = new CustomBlockProxy({
       upstream: "https://upstream.example.com",
       delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
     });
     const res = makeRes();
     const req = makeReq("/pkg/-/pkg-1.0.0.tgz");
@@ -307,6 +311,7 @@ describe("RegistryProxy – routing order", () => {
     const p = new DownloadFirstProxy({
       upstream: "https://upstream.example.com",
       delayMs: 0,
+      maliciousDbPath: "/dev/null",
     });
     const res = makeRes();
     await p.handleRequest(makeReq("/any"), res);
@@ -322,6 +327,7 @@ describe("RegistryProxy – routing order", () => {
     const p = new MetadataFirstProxy({
       upstream: "https://upstream.example.com",
       delayMs: 0,
+      maliciousDbPath: "/dev/null",
     });
     const res = makeRes();
     await p.handleRequest(makeReq("/any"), res);

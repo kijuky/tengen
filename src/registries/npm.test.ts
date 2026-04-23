@@ -22,6 +22,7 @@ const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 const proxy = new NpmRegistryProxy({
   upstream: 'https://registry.npmjs.org',
   delayMs: DELAY_MS,
+  maliciousDbPath: '/dev/null',
 });
 
 const handle = makeHandle(proxy, vi.mocked(axios.get));
@@ -298,8 +299,7 @@ describe('NpmRegistryProxy – metadata filtering', () => {
 
 describe('NpmRegistryProxy – malicious filtering', () => {
   const MALICIOUS_DB = JSON.stringify({
-    maliciousPackages: ['evil-pkg'],
-    maliciousVersions: { 'bad-pkg': ['1.0.0'] },
+    npm: { maliciousPackages: ['evil-pkg'], maliciousVersions: { 'bad-pkg': ['1.0.0'] } },
   });
 
   let maliciousProxy: NpmRegistryProxy;
@@ -310,6 +310,7 @@ describe('NpmRegistryProxy – malicious filtering', () => {
     maliciousProxy = new NpmRegistryProxy({
       upstream: 'https://registry.npmjs.org',
       delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
     });
     maliciousHandle = makeHandle(maliciousProxy, vi.mocked(axios.get));
   });

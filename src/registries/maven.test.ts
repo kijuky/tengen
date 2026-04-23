@@ -34,6 +34,7 @@ beforeEach(() => {
   proxy = new MavenRegistryProxy({
     upstream: "https://repo1.maven.org/maven2",
     delayMs: DELAY_MS,
+    maliciousDbPath: "/dev/null",
   });
 });
 
@@ -286,8 +287,7 @@ describe("MavenRegistryProxy – malicious filtering", () => {
   // /com/example/evil/maven-metadata.xml → "com.example:evil"
   // /com/example/mylib/maven-metadata.xml → "com.example:mylib"
   const MALICIOUS_DB = JSON.stringify({
-    maliciousPackages: ["com.example:evil"],
-    maliciousVersions: { "com.example:mylib": ["1.0.0"] },
+    maven: { maliciousPackages: ["com.example:evil"], maliciousVersions: { "com.example:mylib": ["1.0.0"] } },
   });
 
   let maliciousProxy: MavenRegistryProxy;
@@ -297,6 +297,7 @@ describe("MavenRegistryProxy – malicious filtering", () => {
     maliciousProxy = new MavenRegistryProxy({
       upstream: "https://repo1.maven.org/maven2",
       delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
     });
   });
 

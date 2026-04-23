@@ -122,11 +122,10 @@ describe.skipIf(!yarnExists)('yarn integration tests', () => {
           ...(Object.keys(deps).length ? { dependencies: deps } : {}),
         }, null, 2),
       );
-      // yarn v1 reads .npmrc for the registry URL when --registry is not passed,
-      // which is required for `yarn install` where the flag is unavailable.
       writeFileSync(join(dir, '.npmrc'), `registry=${registryUrl}\n`);
+      // .yarnrc must also set registry so it overrides any user-level ~/.yarnrc
+      writeFileSync(join(dir, '.yarnrc'), `registry "${registryUrl}"\n`);
       if (!isSystemClassic) {
-        // Berry system: write .yarnrc.yml with yarnPath so berry delegates to classic.
         writeFileSync(join(dir, '.yarnrc.yml'), `yarnPath: "${classicBinPath}"\n`);
       }
     }
@@ -206,11 +205,12 @@ describe.skipIf(!yarnExists)('yarn integration tests', () => {
       beforeEach(async () => {
         tmpDir = mkdtempSync(join(tmpdir(), 'tengen-yarn-classic-install-'));
         createProject(tmpDir, { semver: '7.5.4' });
-        // Generate yarn.lock via the proxy (reads registry from .npmrc)
         await runCommand(
           'yarn',
           [
             'install',
+            '--registry',
+            registryUrl,
             '--non-interactive',
             '--no-progress',
             '--ignore-scripts',
@@ -233,6 +233,8 @@ describe.skipIf(!yarnExists)('yarn integration tests', () => {
           [
             'install',
             '--frozen-lockfile',
+            '--registry',
+            registryUrl,
             '--non-interactive',
             '--no-progress',
             '--ignore-scripts',
@@ -285,6 +287,8 @@ describe.skipIf(!yarnExists)('yarn integration tests', () => {
           [
             'install',
             '--frozen-lockfile',
+            '--registry',
+            registryUrl,
             '--non-interactive',
             '--no-progress',
             '--ignore-scripts',

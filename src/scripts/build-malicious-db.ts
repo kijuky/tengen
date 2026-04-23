@@ -5,13 +5,12 @@
  * one JSON file per ecosystem under data/malicious/.
  *
  * Usage:
- *   npm run build-malicious-db
- *   GITHUB_TOKEN=ghp_xxx npm run build-malicious-db   # higher rate limit
+ *   npm run build-malicious-db -- -o /path/to/db.json
+ *   GITHUB_TOKEN=ghp_xxx npm run build-malicious-db    # higher rate limit
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { createGunzip } from 'node:zlib';
 import { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -27,9 +26,6 @@ const SUPPORTED_ECOSYSTEMS = new Set([
   'pypi',
   'rubygems',
 ]);
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_DIR = join(__dirname, '..', '..', 'data', 'malicious');
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -462,9 +458,10 @@ async function expandRanges(db: MaliciousDb): Promise<void> {
   }
 }
 
-async function writeDb(db: MaliciousDb): Promise<void> {
-  await mkdir(OUTPUT_DIR, { recursive: true });
+async function writeDb(db: MaliciousDb, outPath: string): Promise<void> {
+  await mkdir(dirname(outPath), { recursive: true });
 
+  const combined: Record<string, EcosystemOutput> = {};
   for (const [eco, packages] of Object.entries(db).sort()) {
     const output: EcosystemOutput = {
       maliciousPackages: [],
@@ -477,15 +474,20 @@ async function writeDb(db: MaliciousDb): Promise<void> {
         output.maliciousVersions[name] = entry.versions;
       }
     }
-    const outPath = join(OUTPUT_DIR, `${eco}.json`);
-    await writeFile(outPath, JSON.stringify(output, null, 2), 'utf-8');
-    process.stdout.write(`  Wrote ${outPath}  (${Object.keys(packages).length} packages)\n`);
+    combined[eco] = output;
+    process.stdout.write(
+      `  ${eco}: ${Object.keys(packages).length} packages\n`,
+    );
   }
+
+  await writeFile(outPath, JSON.stringify(combined, null, 2), 'utf-8');
+  process.stdout.write(`  Wrote ${outPath}\n`);
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
-async function buildMaliciousDB(): Promise<void> {
+async function buildMaliciousDB(outputPath: string): Promise<void> {
+  const outPath = resolve(outputPath);
   process.stdout.write('=== build-malicious-db ===\n');
 
   const db: MaliciousDb = {};
@@ -500,8 +502,8 @@ async function buildMaliciousDB(): Promise<void> {
     `\nParsed ${totalPackages} unique malicious packages across ${Object.keys(db).length} ecosystems\n\n`,
   );
 
-  await writeDb(db);
-  process.stdout.write('\nDone! Database written to data/malicious/\n');
+  await writeDb(db, outPath);
+  process.stdout.write(`\nDone! Database written to ${outPath}\n`);
 }
 
 export { buildMaliciousDB };

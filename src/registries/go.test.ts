@@ -17,6 +17,7 @@ const mockReadFileSync = vi.mocked(readFileSync);
 const proxy = new GoRegistryProxy({
   upstream: "https://proxy.golang.org",
   delayMs: 7 * 24 * 60 * 60 * 1000,
+  maliciousDbPath: "/dev/null",
 });
 
 const handle = makeHandle(proxy, mockedGet);
@@ -254,8 +255,7 @@ describe("GoRegistryProxy.handleRequest - download (.zip/.mod)", () => {
 
 describe("GoRegistryProxy – malicious filtering", () => {
   const MALICIOUS_DB = JSON.stringify({
-    maliciousPackages: ["github.com/evil/module"],
-    maliciousVersions: { "github.com/foo/bar": ["v1.0.0"] },
+    go: { maliciousPackages: ["github.com/evil/module"], maliciousVersions: { "github.com/foo/bar": ["v1.0.0"] } },
   });
 
   let maliciousProxy: GoRegistryProxy;
@@ -265,6 +265,7 @@ describe("GoRegistryProxy – malicious filtering", () => {
     maliciousProxy = new GoRegistryProxy({
       upstream: "https://proxy.golang.org",
       delayMs: 7 * 24 * 60 * 60 * 1000,
+      maliciousDbPath: "/dev/null",
     });
   });
 

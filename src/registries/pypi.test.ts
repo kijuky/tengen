@@ -20,6 +20,7 @@ const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 const proxy = new PypiRegistryProxy({
   upstream: 'https://pypi.org',
   delayMs: DELAY_MS,
+  maliciousDbPath: '/dev/null',
 });
 
 const handle = makeHandle(proxy, vi.mocked(axios.get));
@@ -528,8 +529,7 @@ describe('PypiRegistryProxy – download route (/packages/...)', () => {
 
 describe('PypiRegistryProxy – malicious filtering', () => {
   const MALICIOUS_DB = JSON.stringify({
-    maliciousPackages: ['evil-pkg'],
-    maliciousVersions: { 'requests': ['2.28.0'] },
+    pypi: { maliciousPackages: ['evil-pkg'], maliciousVersions: { 'requests': ['2.28.0'] } },
   });
 
   let maliciousProxy: PypiRegistryProxy;
@@ -540,6 +540,7 @@ describe('PypiRegistryProxy – malicious filtering', () => {
     maliciousProxy = new PypiRegistryProxy({
       upstream: 'https://pypi.org',
       delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
     });
     maliciousHandle = makeHandle(maliciousProxy, vi.mocked(axios.get));
   });

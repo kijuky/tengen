@@ -16,6 +16,7 @@ const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 const proxy = new ComposerRegistryProxy({
   upstream: 'https://packagist.org',
   delayMs: DELAY_MS,
+  maliciousDbPath: '/dev/null',
 });
 
 const handle = makeHandle(proxy, vi.mocked(axios.get));

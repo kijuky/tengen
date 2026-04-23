@@ -27,6 +27,7 @@ const NOW = new Date(CUTOFF.getTime() + DELAY_MS);
 const proxy = new RubygemsRegistryProxy({
   upstream: 'https://rubygems.org',
   delayMs: DELAY_MS,
+  maliciousDbPath: '/dev/null',
 });
 
 const handle = makeHandle(proxy, mockedGet);
@@ -332,8 +333,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
 
 describe('RubygemsRegistryProxy – malicious filtering', () => {
   const MALICIOUS_DB = JSON.stringify({
-    maliciousPackages: ['evil-gem'],
-    maliciousVersions: { rails: ['7.0.0'] },
+    rubygems: { maliciousPackages: ['evil-gem'], maliciousVersions: { rails: ['7.0.0'] } },
   });
 
   let maliciousProxy: RubygemsRegistryProxy;
@@ -345,6 +345,7 @@ describe('RubygemsRegistryProxy – malicious filtering', () => {
     maliciousProxy = new RubygemsRegistryProxy({
       upstream: 'https://rubygems.org',
       delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
     });
     maliciousHandle = makeHandle(maliciousProxy, mockedGet);
   });

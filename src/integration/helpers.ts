@@ -32,6 +32,7 @@ export async function startTestServer(): Promise<TestServer> {
     host: '127.0.0.1',
     port: 0,
     delayDays: DELAY_DAYS,
+    maliciousDbPath: '/dev/null',
     upstreams: DEFAULT_UPSTREAMS,
   });
 

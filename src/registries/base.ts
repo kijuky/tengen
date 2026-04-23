@@ -1,23 +1,15 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { Request, Response } from 'express';
 import axios, { type AxiosResponse } from 'axios';
-import type { EcosystemOutput } from '../types.ts';
-
-const DATA_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'data',
-  'malicious',
-);
+import type { Request, Response } from 'express';
+import { readFileSync } from 'node:fs';
+import type { MaliciousDb } from '../types.ts';
 
 interface RegistryConfig {
   /** Upstream registry base URL */
   upstream: string;
   /** Filter out versions published within this many milliseconds */
   delayMs: number;
+  /** Path to a single combined malicious DB JSON file (all ecosystems) */
+  maliciousDbPath: string;
 }
 
 export interface VersionMetadata {
@@ -76,6 +68,8 @@ interface CustomRouting {
  * behaviour, add additional routes in `setRouting()` with custom `requestUpstream`,
  * `filterMetadata`, and `respond` callbacks.
  */
+let cachedCombinedDb: MaliciousDb | null | undefined;
+
 export abstract class RegistryProxy {
   /** The human-readable name of this registry (e.g. "npm", "pypi") */
   abstract readonly name: string;
@@ -199,8 +193,7 @@ export abstract class RegistryProxy {
     // Use 307 for non-GET/HEAD requests so the client preserves the original
     // HTTP method (e.g. POST for npm audit). 302 allows clients to switch to
     // GET, which causes upstream to return 405 Method Not Allowed.
-    const status =
-      req.method === 'GET' || req.method === 'HEAD' ? 302 : 307;
+    const status = req.method === 'GET' || req.method === 'HEAD' ? 302 : 307;
     res.redirect(status, url);
   }
 
@@ -210,11 +203,16 @@ export abstract class RegistryProxy {
   } | null {
     if (this.cachedMaliciousDb !== undefined) return this.cachedMaliciousDb;
     try {
-      const content = readFileSync(
-        join(DATA_DIR, `${this.name}.json`),
-        'utf-8',
-      );
-      const raw = JSON.parse(content) as EcosystemOutput;
+      const dbPath = this.config.maliciousDbPath;
+      if (cachedCombinedDb === undefined) {
+        const content = readFileSync(dbPath, 'utf-8');
+        cachedCombinedDb = JSON.parse(content) as MaliciousDb;
+      }
+      const raw = cachedCombinedDb?.[this.name];
+      if (!raw) {
+        this.cachedMaliciousDb = null;
+        return null;
+      }
       this.cachedMaliciousDb = {
         packages: new Set(raw.maliciousPackages),
         versions: new Map(
