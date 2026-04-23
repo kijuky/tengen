@@ -66,11 +66,11 @@ export interface CommandResult {
 export function runCommand(
   cmd: string,
   args: string[],
-  opts: { env?: Record<string, string>; cwd?: string } = {},
+  opts: { env?: Record<string, string>; cwd?: string; timeout?: number } = {},
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
-      timeout: 15_000,
+      timeout: opts.timeout ?? 15_000,
       env: { ...process.env, ...opts.env },
       cwd: opts.cwd,
     });
