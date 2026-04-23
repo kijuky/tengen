@@ -28,18 +28,11 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW } from './helpers.ts';
+import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
-const goExists = (() => {
-  try {
-    execSync('go version', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const goExists = isAvailable('go');
 
 describe('go module proxy integration tests', () => {
   let ts: TestServer;

@@ -20,7 +20,6 @@ import {
   afterAll,
   afterEach,
 } from 'vitest';
-import { execSync } from 'node:child_process';
 import {
   mkdtempSync,
   writeFileSync,
@@ -30,18 +29,11 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW } from './helpers.ts';
+import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
-const npmExists = (() => {
-  try {
-    execSync('npm --version', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const npmExists = isAvailable('npm');
 
 describe.skipIf(!npmExists)('npm integration tests', () => {
   let ts: TestServer;
@@ -63,6 +55,16 @@ describe.skipIf(!npmExists)('npm integration tests', () => {
   });
 
   describe('npm view', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), 'tengen-npm-view-'));
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+    });
+
     function npmView(
       args: string,
     ): Promise<{ exitCode: number; stdout: string }> {
@@ -73,6 +75,8 @@ describe.skipIf(!npmExists)('npm integration tests', () => {
         '--json',
         '--no-update-notifier',
         '--no-fund',
+        '--cache',
+        join(tmpDir, '.npm-cache'),
       ]);
     }
 

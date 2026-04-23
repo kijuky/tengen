@@ -19,7 +19,6 @@ import {
   afterAll,
   afterEach,
 } from 'vitest';
-import { execSync } from 'node:child_process';
 import {
   mkdtempSync,
   writeFileSync,
@@ -29,18 +28,11 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW } from './helpers.ts';
+import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
-const pnpmExists = (() => {
-  try {
-    execSync('pnpm --version', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+const pnpmExists = isAvailable('pnpm');
 
 describe.skipIf(!pnpmExists)('pnpm integration tests', () => {
   let ts: TestServer;
