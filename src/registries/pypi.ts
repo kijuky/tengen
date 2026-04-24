@@ -44,18 +44,17 @@ export class PypiRegistryProxy extends RegistryProxy {
 
   /**
    * Routes:
-   *   /simple/{name}/             → Simple API (HTML or JSON); file URLs are rewritten to proxy-relative paths
+   *   /simple/{name}              → Simple API (HTML or JSON); file URLs are rewritten to proxy-relative paths
    *   /pypi/{name}/json           → JSON API metadata (package-level)
    *   /pypi/{name}/{version}/json → JSON API metadata (version-specific)
    *   /packages/...               → download route (version-filtered then passthrough)
    */
   public setRouting() {
     this.addMetadataRoute<SimpleApiMetadata, PypiVersionMetadataType>({
-      condition: (req) =>
-        req.path.startsWith('/simple/') && req.path.endsWith('/'),
+      condition: (req) => req.path.startsWith('/simple/'),
       requestUpstream: async (originalReq) => {
         return await axios.get<SimpleApiMetadata>(
-          this.buildUpstreamUrl(originalReq),
+          this.buildUpstreamUrl(originalReq).replace(/\/$/, '') + '/',
           {
             validateStatus: () => true,
             maxRedirects: 0,
