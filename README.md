@@ -177,7 +177,7 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 
 | Path pattern                  | Action                                                                |
 | ----------------------------- | --------------------------------------------------------------------- |
-| `/simple/{name}/`             | Filtered — Simple API (HTML or JSON)                                  |
+| `/simple/{name}`              | Filtered — Simple API (HTML or JSON)                                  |
 | `/pypi/{name}/json`           | Filtered — JSON API (package-level metadata)                          |
 | `/pypi/{name}/{version}/json` | Filtered — JSON API (version-specific metadata)                       |
 | `/packages/...`               | Download — redirect to upstream if allowed; 404 if version is blocked |

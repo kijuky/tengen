@@ -161,7 +161,10 @@ describe.skipIf(!poetryCmd)('poetry add', () => {
       ['add', pkg, '--no-interaction'],
       {
         cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
+        env: {
+          POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache'),
+          POETRY_CONFIG_DIR: join(tmpDir, '.poetry-config'),
+        },
       },
     );
   }
@@ -236,7 +239,10 @@ describe.skipIf(!poetryCmd)('poetry install', () => {
       ['install', '--no-root', '--no-interaction'],
       {
         cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
+        env: {
+          POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache'),
+          POETRY_CONFIG_DIR: join(tmpDir, '.poetry-config'),
+        },
       },
     );
     expect(exitCode).not.toBe(0);
@@ -291,24 +297,23 @@ describe.skipIf(!poetryCmd)('poetry sync', () => {
   it('exits zero and syncs an allowed version (real download)', async () => {
     createProject('2023.7.22');
 
+    const poetryEnv = {
+      POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache'),
+      POETRY_CONFIG_DIR: join(tmpDir, '.poetry-config'),
+    };
+
     // First generate the lockfile
     const lock = await runCommand(
       poetryCmd!,
       ['lock', '--no-interaction'],
-      {
-        cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
-      },
+      { cwd: tmpDir, env: poetryEnv },
     );
     expect(lock.exitCode).toBe(0);
 
     const { exitCode } = await runCommand(
       poetryCmd!,
       ['sync', '--no-root', '--no-interaction'],
-      {
-        cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
-      },
+      { cwd: tmpDir, env: poetryEnv },
     );
     expect(exitCode).toBe(0);
   }, 120_000);
@@ -318,14 +323,16 @@ describe.skipIf(!poetryCmd)('poetry sync', () => {
     // constraint is still satisfied and poetry does not reject the lock file.
     createProject('>=2023.7');
 
+    const poetryEnv = {
+      POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache'),
+      POETRY_CONFIG_DIR: join(tmpDir, '.poetry-config'),
+    };
+
     // Generate a valid lock file resolving to the allowed version 2023.7.22.
     const lockResult = await runCommand(
       poetryCmd!,
       ['lock', '--no-interaction'],
-      {
-        cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
-      },
+      { cwd: tmpDir, env: poetryEnv },
     );
     expect(lockResult.exitCode).toBe(0);
 
@@ -361,10 +368,7 @@ describe.skipIf(!poetryCmd)('poetry sync', () => {
     const { exitCode } = await runCommand(
       poetryCmd!,
       ['sync', '--no-root', '--no-interaction'],
-      {
-        cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
-      },
+      { cwd: tmpDir, env: poetryEnv },
     );
     expect(exitCode).not.toBe(0);
   }, 60_000);
@@ -423,7 +427,10 @@ describe.skipIf(!poetryCmd)('poetry lock', () => {
       ['lock', '--no-interaction'],
       {
         cwd: tmpDir,
-        env: { POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache') },
+        env: {
+          POETRY_CACHE_DIR: join(tmpDir, '.poetry-cache'),
+          POETRY_CONFIG_DIR: join(tmpDir, '.poetry-config'),
+        },
       },
     );
     expect(exitCode).not.toBe(0);
