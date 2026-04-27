@@ -147,6 +147,27 @@ export abstract class RegistryProxy {
       });
     const response = await route.requestUpstream(req);
     if (response.status !== 200) {
+      if (response.headers['location']) {
+        const location = response.headers['location'];
+        try {
+          const locationUrl = new URL(location);
+          const upstreamUrl = new URL(this.config.upstream);
+          if (locationUrl.origin === upstreamUrl.origin) {
+            res.set(
+              'location',
+              '/' +
+                this.name +
+                locationUrl.pathname +
+                locationUrl.search +
+                locationUrl.hash,
+            );
+          } else {
+            res.set('location', location);
+          }
+        } catch {
+          res.set('location', location);
+        }
+      }
       res
         .status(response.status)
         .type(response.headers['content-type'] || 'application/json')

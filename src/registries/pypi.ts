@@ -103,7 +103,7 @@ export class PypiRegistryProxy extends RegistryProxy {
           `${this.config.upstream.replace(/\/$/, '')}/simple/${packageName}/`,
           {
             validateStatus: () => true,
-            maxRedirects: 0,
+            maxRedirects: 1, // for path normalization redirects
             headers: { Accept: 'application/vnd.pypi.simple.v1+json' },
           },
         );
@@ -243,7 +243,7 @@ function parseDownloadFilename(
       : filename.slice(0, -4);
     const dashIdx = base.indexOf('-');
     if (dashIdx === -1) return null;
-    const packageName = base.slice(0, dashIdx).toLowerCase().replace(/_/g, '-');
+    const packageName = base.slice(0, dashIdx).toLowerCase().replace(/[-_.]+/g, '-');
     const version = base.slice(dashIdx + 1).split('-')[0];
     if (!version) return null;
     return { packageName, version };
@@ -267,7 +267,7 @@ function parseDownloadFilename(
         .slice(0, i)
         .join('-')
         .toLowerCase()
-        .replace(/_/g, '-');
+        .replace(/[-_.]+/g, '-');
       const version = parts.slice(i).join('-');
       return { packageName, version };
     }

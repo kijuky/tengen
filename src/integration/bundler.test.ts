@@ -146,6 +146,7 @@ describe('rubygems proxy integration tests', () => {
         return runCommand('bundle', ['add', gem, '--no-color', ...args], {
           cwd: tmpDir,
           env: { BUNDLE_PATH: join(tmpDir, 'vendor', 'bundle') },
+          timeout: 55_000,
         });
       }
 
@@ -199,6 +200,7 @@ describe('rubygems proxy integration tests', () => {
         await runCommand('bundle', ['install', '--no-color'], {
           cwd: tmpDir,
           env: { BUNDLE_PATH: join(tmpDir, 'vendor', 'bundle') },
+          timeout: 55_000,
         });
         // Relax the constraint so bundle update can upgrade
         writeFileSync(
@@ -210,7 +212,7 @@ describe('rubygems proxy integration tests', () => {
             '',
           ].join('\n'),
         );
-      });
+      }, 60_000);
 
       afterEach(() => {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -225,6 +227,7 @@ describe('rubygems proxy integration tests', () => {
           {
             cwd: tmpDir,
             env: { BUNDLE_PATH: join(tmpDir, 'vendor', 'bundle') },
+            timeout: 55_000,
           },
         );
       }

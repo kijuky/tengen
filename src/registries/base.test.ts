@@ -63,6 +63,57 @@ describe("RegistryProxy – metadata routing", () => {
     expect(res.send).toHaveBeenCalledWith(data);
   });
 
+  it("forwards Location header on redirect, stripping domain when it matches upstream", async () => {
+    mockedGet.mockResolvedValue({
+      status: 302,
+      data: "",
+      headers: {
+        "content-type": "text/html",
+        location: "https://upstream.example.com/pkg/redirected?q=1",
+      },
+    });
+    const res = makeRes();
+    await metaProxy.handleRequest(makeReq("/pkg"), res);
+
+    expect(res.set).toHaveBeenCalledWith("location", "/meta-test/pkg/redirected?q=1");
+    expect(res.status).toHaveBeenCalledWith(302);
+  });
+
+  it("forwards Location header as-is when domain differs from upstream", async () => {
+    mockedGet.mockResolvedValue({
+      status: 301,
+      data: "",
+      headers: {
+        "content-type": "text/html",
+        location: "https://other.example.com/pkg/somewhere",
+      },
+    });
+    const res = makeRes();
+    await metaProxy.handleRequest(makeReq("/pkg"), res);
+
+    expect(res.set).toHaveBeenCalledWith(
+      "location",
+      "https://other.example.com/pkg/somewhere",
+    );
+    expect(res.status).toHaveBeenCalledWith(301);
+  });
+
+  it("forwards relative Location header as-is", async () => {
+    mockedGet.mockResolvedValue({
+      status: 302,
+      data: "",
+      headers: {
+        "content-type": "text/html",
+        location: "/relative/path",
+      },
+    });
+    const res = makeRes();
+    await metaProxy.handleRequest(makeReq("/pkg"), res);
+
+    expect(res.set).toHaveBeenCalledWith("location", "/relative/path");
+    expect(res.status).toHaveBeenCalledWith(302);
+  });
+
   it("does not forward request headers to upstream", async () => {
     const data = { name: "pkg", versions: {}, time: {}, "dist-tags": {} };
     mockedGet.mockResolvedValue({ status: 200, data, headers: {} });

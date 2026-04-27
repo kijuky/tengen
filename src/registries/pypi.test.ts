@@ -527,6 +527,72 @@ describe('PypiRegistryProxy – download route (/packages/...)', () => {
   });
 });
 
+describe('PypiRegistryProxy – namespace packages with dots in name', () => {
+  it('redirects .whl with dots in package name (e.g. ruamel.yaml.clib)', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'ruamel-yaml-clib',
+      versions: ['0.2.14'],
+      files: [makeSimpleFile('ruamel.yaml.clib-0.2.14-cp314-cp314-macosx_15_0_arm64.whl', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/packages/6b/fa/3234f913fe9a6525a7b97c6dad1f51e72b917e6872e051a5e2ffd8b16fbb/ruamel.yaml.clib-0.2.14-cp314-cp314-macosx_15_0_arm64.whl'),
+      res,
+    );
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith(
+      expect.stringContaining('/simple/ruamel-yaml-clib/'),
+      expect.anything(),
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      expect.stringContaining('ruamel.yaml.clib-0.2.14-cp314-cp314-macosx_15_0_arm64.whl'),
+    );
+  });
+
+  it('redirects .tar.gz with dots in package name', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'ruamel-yaml-clib',
+      versions: ['0.2.14'],
+      files: [makeSimpleFile('ruamel.yaml.clib-0.2.14.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/packages/ab/cd/ruamel.yaml.clib-0.2.14.tar.gz'),
+      res,
+    );
+    expect(vi.mocked(axios.get)).toHaveBeenCalledWith(
+      expect.stringContaining('/simple/ruamel-yaml-clib/'),
+      expect.anything(),
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      expect.stringContaining('ruamel.yaml.clib-0.2.14.tar.gz'),
+    );
+  });
+
+  it('filters versions for simple API with dotted package names', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'ruamel-yaml-clib',
+      versions: ['0.2.14'],
+      files: [makeSimpleFile('ruamel.yaml.clib-0.2.14-cp314-cp314-macosx_15_0_arm64.whl', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/simple/ruamel-yaml-clib/', { accept: 'application/vnd.pypi.simple.v1+json' }),
+      res,
+    );
+    const result = responseBody(res);
+    expect((result['files'] as unknown[]).length).toBe(1);
+    expect((result['versions'] as unknown[]).length).toBe(1);
+  });
+});
+
 describe('PypiRegistryProxy – malicious filtering', () => {
   const MALICIOUS_DB = JSON.stringify({
     pypi: { maliciousPackages: ['evil-pkg'], maliciousVersions: { 'requests': ['2.28.0'] } },

@@ -35,6 +35,7 @@ export function makeRes(): Response {
   res.send = vi.fn().mockReturnValue(res);
   res.end = vi.fn().mockReturnValue(res);
   res.type = vi.fn().mockReturnValue(res);
+  res.set = vi.fn().mockReturnValue(res);
   res.setHeader = vi.fn().mockReturnValue(res);
   res.redirect = vi.fn().mockReturnValue(res);
   return res as unknown as Response;
