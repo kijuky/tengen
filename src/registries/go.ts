@@ -53,6 +53,35 @@ export class GoRegistryProxy extends RegistryProxy {
     const origin = new URL(this.config.upstream).origin;
     const modulePath = req.path.slice(0, req.path.length - '/@v/list'.length);
     const packageName = modulePath.slice(1);
+
+    // golang.org/toolchain has a huge number of versions (one per Go version × architecture).
+    // Only fetch .info for one representative per Go version and apply its publish time to all arch variants.
+    if (isToolchainModule(modulePath)) {
+      const allVersions = metadata.split('\n').filter((v) => v.trim());
+      const { representatives, groupMap } =
+        deduplicateToolchainVersions(allVersions);
+      const repInfos = await fetchAllInfos(
+        origin,
+        modulePath,
+        representatives.join('\n'),
+      );
+      const infoByVersion = new Map(repInfos.map((i) => [i.Version, i]));
+      const result: VersionMetadata[] = [];
+      for (const [, group] of groupMap) {
+        // Expand the representative's info to all arch variants of this Go version
+        const info = infoByVersion.get(group[0]);
+        if (!info) continue;
+        for (const v of group) {
+          result.push({
+            packageName,
+            version: v,
+            published: new Date(info.Time),
+          });
+        }
+      }
+      return result;
+    }
+
     const infos = await fetchAllInfos(origin, modulePath, metadata);
     return infos.map((v) => ({
       packageName,
@@ -101,7 +130,21 @@ export class GoRegistryProxy extends RegistryProxy {
       res.status(404).send('not found');
       return;
     }
-    const infos = await fetchAllInfos(origin, modulePath, listRes.data);
+    // For toolchain, only fetch .info for one representative per Go version
+    let infos: GoVersionInfo[];
+    if (isToolchainModule(modulePath)) {
+      const allVersions = listRes.data
+        .split('\n')
+        .filter((v: string) => v.trim());
+      const { representatives } = deduplicateToolchainVersions(allVersions);
+      infos = await fetchAllInfos(
+        origin,
+        modulePath,
+        representatives.join('\n'),
+      );
+    } else {
+      infos = await fetchAllInfos(origin, modulePath, listRes.data);
+    }
     const allowedSet = new Set(
       this.filterVersions(
         infos.map((v) => ({
@@ -139,6 +182,43 @@ function respondList(res: Response, filteredText: string): void {
     return;
   }
   res.status(200).type('text/plain').send(filteredText);
+}
+
+function isToolchainModule(modulePath: string): boolean {
+  const cleaned = modulePath.startsWith('/') ? modulePath.slice(1) : modulePath;
+  return cleaned === 'golang.org/toolchain';
+}
+
+// Strip the OS-arch suffix: "v0.0.1-go1.21.0.linux-amd64" -> "v0.0.1-go1.21.0"
+function getToolchainBaseVersion(version: string): string {
+  const match = version.match(/^(v[\d.]+-go[\d.]+(?:(?:rc|beta)\d+)?)\./);
+  return match ? match[1] : version;
+}
+
+// Group versions by Go version base, returning one representative per group (prefer linux variants)
+function deduplicateToolchainVersions(versions: string[]): {
+  representatives: string[];
+  groupMap: Map<string, string[]>;
+} {
+  const groupMap = new Map<string, string[]>();
+  for (const v of versions) {
+    const base = getToolchainBaseVersion(v);
+    const group = groupMap.get(base);
+    if (group) {
+      group.push(v);
+    } else {
+      groupMap.set(base, [v]);
+    }
+  }
+  const representatives: string[] = [];
+  for (const group of groupMap.values()) {
+    const linuxIdx = group.findIndex((v) => v.includes('.linux-'));
+    if (linuxIdx > 0) {
+      [group[0], group[linuxIdx]] = [group[linuxIdx], group[0]];
+    }
+    representatives.push(group[0]);
+  }
+  return { representatives, groupMap };
 }
 
 async function fetchAllInfos(

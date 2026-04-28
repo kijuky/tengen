@@ -253,6 +253,126 @@ describe("GoRegistryProxy.handleRequest - download (.zip/.mod)", () => {
   });
 });
 
+describe("GoRegistryProxy – golang.org/toolchain deduplication", () => {
+  it("fetches .info only once per Go version and includes all arch variants in list", async () => {
+    const listText =
+      "v0.0.1-go1.21.0.linux-amd64\nv0.0.1-go1.21.0.darwin-arm64\nv0.0.1-go1.22.0.linux-amd64\nv0.0.1-go1.22.0.darwin-arm64\n";
+
+    mockedGet
+      // list response
+      .mockResolvedValueOnce({ status: 200, data: listText, headers: {} })
+      // .info for v0.0.1-go1.21.0.linux-amd64 (representative for go1.21.0)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v0.0.1-go1.21.0.linux-amd64", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      })
+      // .info for v0.0.1-go1.22.0.linux-amd64 (representative for go1.22.0)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v0.0.1-go1.22.0.linux-amd64", Time: "2024-01-10T00:00:00Z" },
+        headers: {},
+      });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/golang.org/toolchain/@v/list"), res);
+
+    // Only 2 .info fetches (1 per Go version), not 4
+    expect(mockedGet).toHaveBeenCalledTimes(3); // 1 list + 2 info
+    expect(res.status).toHaveBeenCalledWith(200);
+    // All 4 arch variants should be included since both Go versions pass the cutoff
+    const sent = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(sent).toContain("v0.0.1-go1.21.0.linux-amd64");
+    expect(sent).toContain("v0.0.1-go1.21.0.darwin-arm64");
+    expect(sent).toContain("v0.0.1-go1.22.0.linux-amd64");
+    expect(sent).toContain("v0.0.1-go1.22.0.darwin-arm64");
+  });
+
+  it("prefers linux variant as representative even when darwin appears first in list", async () => {
+    // darwin-arm64 appears before linux-amd64 in the list
+    const listText =
+      "v0.0.1-go1.21.0.darwin-arm64\nv0.0.1-go1.21.0.linux-amd64\n";
+
+    mockedGet
+      .mockResolvedValueOnce({ status: 200, data: listText, headers: {} })
+      // Should fetch .info for the linux variant, not darwin
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v0.0.1-go1.21.0.linux-amd64", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/golang.org/toolchain/@v/list"), res);
+
+    // Verify the .info was fetched for the linux variant
+    expect(mockedGet).toHaveBeenCalledTimes(2);
+    expect(mockedGet).toHaveBeenCalledWith(
+      "https://proxy.golang.org/golang.org/toolchain/@v/v0.0.1-go1.21.0.linux-amd64.info",
+      expect.any(Object),
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    const sent = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(sent).toContain("v0.0.1-go1.21.0.darwin-arm64");
+    expect(sent).toContain("v0.0.1-go1.21.0.linux-amd64");
+  });
+
+  it("excludes all arch variants when their Go version is after cutoff", async () => {
+    const listText =
+      "v0.0.1-go1.21.0.linux-amd64\nv0.0.1-go1.21.0.darwin-arm64\nv0.0.1-go1.22.0.linux-amd64\nv0.0.1-go1.22.0.darwin-arm64\n";
+
+    mockedGet
+      .mockResolvedValueOnce({ status: 200, data: listText, headers: {} })
+      // go1.21.0: before cutoff
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v0.0.1-go1.21.0.linux-amd64", Time: "2024-01-01T00:00:00Z" },
+        headers: {},
+      })
+      // go1.22.0: after cutoff
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { Version: "v0.0.1-go1.22.0.linux-amd64", Time: "2024-02-01T00:00:00Z" },
+        headers: {},
+      });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/golang.org/toolchain/@v/list"), res);
+
+    const sent = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(sent).toContain("v0.0.1-go1.21.0.linux-amd64");
+    expect(sent).toContain("v0.0.1-go1.21.0.darwin-arm64");
+    expect(sent).not.toContain("go1.22.0");
+  });
+
+  it("deduplicates in handleLatest fallback path", async () => {
+    const latestInfo = { Version: "v0.0.1-go1.22.0.linux-amd64", Time: "2024-02-01T00:00:00Z" };
+    const go121Info = { Version: "v0.0.1-go1.21.0.linux-amd64", Time: "2024-01-10T00:00:00Z" };
+
+    mockedGet
+      // /@latest → too new
+      .mockResolvedValueOnce({ status: 200, data: latestInfo, headers: {} })
+      // fallback list
+      .mockResolvedValueOnce({
+        status: 200,
+        data: "v0.0.1-go1.21.0.linux-amd64\nv0.0.1-go1.21.0.darwin-arm64\nv0.0.1-go1.22.0.linux-amd64\nv0.0.1-go1.22.0.darwin-arm64\n",
+        headers: {},
+      })
+      // .info for go1.21.0 representative only
+      .mockResolvedValueOnce({ status: 200, data: go121Info, headers: {} })
+      // .info for go1.22.0 representative only
+      .mockResolvedValueOnce({ status: 200, data: latestInfo, headers: {} });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/golang.org/toolchain/@latest"), res);
+
+    // 1 latest + 1 list + 2 info (not 4 info)
+    expect(mockedGet).toHaveBeenCalledTimes(4);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(go121Info);
+  });
+});
+
 describe("GoRegistryProxy – malicious filtering", () => {
   const MALICIOUS_DB = JSON.stringify({
     go: { maliciousPackages: ["github.com/evil/module"], maliciousVersions: { "github.com/foo/bar": ["v1.0.0"] } },
