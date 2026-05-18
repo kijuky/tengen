@@ -55,8 +55,9 @@ interface PackageEntry {
   versions: string[];
   /** True when all versions are affected (no upper bound in range) */
   allVersions: boolean;
-  /** Version ranges (introduced/fixed pairs) for partial range cases */
-  ranges: Array<{ introduced: string; fixed?: string }>;
+  /** Version ranges for partial range cases. `fixed` is exclusive (semver
+   *  convention); `lastAffected` is inclusive (OSV `last_affected`). */
+  ranges: Array<{ introduced: string; fixed?: string; lastAffected?: string }>;
   /** MAL IDs referencing this package */
   ids: string[];
 }
@@ -142,14 +143,20 @@ function versionCompare(a: string, b: string): number {
   return 0;
 }
 
-/** True if version satisfies any of the given introduced/fixed ranges */
+/** True if version satisfies any of the given ranges (fixed exclusive,
+ *  lastAffected inclusive). */
 function inAnyRange(
   version: string,
-  ranges: Array<{ introduced: string; fixed?: string }>,
+  ranges: Array<{ introduced: string; fixed?: string; lastAffected?: string }>,
 ): boolean {
   return ranges.some((range) => {
     if (versionCompare(version, range.introduced) < 0) return false;
     if (range.fixed !== undefined && versionCompare(version, range.fixed) >= 0)
+      return false;
+    if (
+      range.lastAffected !== undefined &&
+      versionCompare(version, range.lastAffected) > 0
+    )
       return false;
     return true;
   });
@@ -319,6 +326,7 @@ function mergeRecord(db: MaliciousDb, record: OsvRecord): void {
     if (!entry.ids.includes(record.id)) entry.ids.push(record.id);
 
     // Exact versions
+    const hasExactVersions = (affected.versions?.length ?? 0) > 0;
     for (const v of affected.versions ?? []) {
       if (!entry.versions.includes(v)) entry.versions.push(v);
     }
@@ -329,14 +337,40 @@ function mergeRecord(db: MaliciousDb, record: OsvRecord): void {
       while (i < range.events.length) {
         const ev = range.events[i];
         if (ev.introduced !== undefined) {
-          const fixed = range.events[i + 1]?.fixed;
-          if (fixed === undefined) {
-            // No upper bound → all versions from `introduced` onwards
-            entry.allVersions = true;
-          } else {
+          const next = range.events[i + 1];
+          const fixed = next?.fixed;
+          const lastAffected = next?.last_affected;
+          if (fixed !== undefined) {
             entry.ranges.push({ introduced: ev.introduced, fixed });
             i++; // skip the fixed event
+          } else if (lastAffected !== undefined) {
+            // Closed range `introduced` + `last_affected`. When `versions` is
+            // present, those are the source of truth and this range is
+            // redundant. When it's absent, fall through to expandRanges so a
+            // registry fetch can materialise the affected versions.
+            if (!hasExactVersions) {
+              entry.ranges.push({ introduced: ev.introduced, lastAffected });
+            }
+            i++;
+          } else if (!hasExactVersions) {
+            // Open-ended range with no explicit versions. `introduced: "0"`
+            // is the OSV idiom for "every version" (typical of dependency-
+            // confusion squats), so treat it as allVersions. A non-zero
+            // introduced means "this version and later" — leave the lower
+            // bound to expandRanges to materialise from the registry.
+            if (
+              ev.introduced === '0' ||
+              ev.introduced === '0.0' ||
+              ev.introduced === '0.0.0'
+            ) {
+              entry.allVersions = true;
+            } else {
+              entry.ranges.push({ introduced: ev.introduced });
+            }
           }
+          // Open-ended range *with* an explicit `versions` list: trust the
+          // list. OSV frequently pairs `introduced: 0` with the actually-
+          // published malicious versions (e.g. dependency-confusion shims).
         }
         i++;
       }
