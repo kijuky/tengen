@@ -655,6 +655,43 @@ describe('PypiRegistryProxy – malicious filtering', () => {
     expect(files[0]['filename']).toBe('requests-2.29.0.tar.gz');
   });
 
+  it('does not leak a malicious version whose number is a prefix of a safe one (simple API)', async () => {
+    // Regression: substring matching on `-${ver}.` made `requests-2.28.0.*`
+    // match `ver="2.28"` too, so a malicious 2.28.0 could slip through under
+    // the 2.28 label even when 2.28.0 itself was in the malicious DB.
+    const maliciousDb = JSON.stringify({
+      pypi: {
+        maliciousPackages: [],
+        maliciousVersions: { requests: ['2.28.0'] },
+      },
+    });
+    mockReadFileSync.mockReturnValue(maliciousDb);
+    const prefixProxy = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+    });
+
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28', '2.28.0'],
+      files: [
+        makeSimpleFile('requests-2.28.tar.gz', '2024-01-01T00:00:00Z'),
+        makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z'),
+      ],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await prefixProxy.handleRequest(
+      makeReq('/simple/requests/', { accept: 'application/vnd.pypi.simple.v1+json' }),
+      res,
+    );
+    const result = responseBody(res);
+    const files = result['files'] as Record<string, unknown>[];
+    expect(files.map((f) => f['filename'])).toEqual(['requests-2.28.tar.gz']);
+  });
+
   it('blocks all releases of a fully malicious package (JSON API)', async () => {
     const data = {
       info: { name: 'evil-pkg', version: '1.0.0' },

@@ -133,25 +133,24 @@ export class PypiRegistryProxy extends RegistryProxy {
 function getSimpleApiVersions(
   metadata: SimpleApiMetadata,
 ): PypiVersionMetadataType[] {
+  // Parse each filename to derive its exact version, then associate the file
+  // with that single version. Substring matching (e.g. `-${ver}.`) would
+  // mis-associate `pkg-1.0.1-*.whl` with version `1.0`, letting a malicious
+  // `1.0.1` slip through under the `1.0` label.
+  const knownVersions = new Set(metadata.versions);
   const versions: PypiVersionMetadataType[] = [];
-  metadata.versions.map((ver) => {
-    metadata.files
-      .filter(
-        (file) =>
-          file.filename.includes(`-${ver}.`) ||
-          file.filename.includes(`-${ver}-`),
-      )
-      .forEach((file) => {
-        if (file['upload-time']) {
-          versions.push({
-            packageName: metadata.name,
-            version: ver,
-            published: new Date(file['upload-time']),
-            filename: file.filename,
-          });
-        }
-      });
-  });
+  for (const file of metadata.files) {
+    if (!file['upload-time']) continue;
+    const parsed = parseDownloadFilename(file.filename);
+    if (!parsed) continue;
+    if (!knownVersions.has(parsed.version)) continue;
+    versions.push({
+      packageName: metadata.name,
+      version: parsed.version,
+      published: new Date(file['upload-time']),
+      filename: file.filename,
+    });
+  }
   return versions;
 }
 
