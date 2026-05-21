@@ -35,8 +35,9 @@ const handle = makeHandle(proxy, mockedGet);
 function makeVersion(
   number: string,
   createdAt: string,
+  platform = 'ruby',
 ): Record<string, unknown> {
-  return { number, created_at: createdAt, authors: 'test' };
+  return { number, platform, created_at: createdAt, authors: 'test' };
 }
 
 beforeEach(() => {
@@ -184,9 +185,29 @@ describe('RubygemsRegistryProxy – /api/v1/versions/{name}.json', () => {
     );
     expect(res.status).toHaveBeenCalledWith(404);
   });
+
+  it('keeps platform-specific entries that share a version number with the ruby platform', async () => {
+    // ffi 1.17.4 ships as both `ruby` and platform-specific gems. All variants
+    // share `number: "1.17.4"` and must be retained when the date is allowed.
+    const data = [
+      makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'ruby'),
+      makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'arm64-darwin'),
+      makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'x86_64-linux'),
+    ];
+    const res = await handle('/api/v1/versions/ffi.json', data);
+    expect(res.status).toHaveBeenCalledWith(200);
+    const body = vi.mocked(res.json).mock.calls[0][0] as Array<
+      Record<string, unknown>
+    >;
+    expect(body).toHaveLength(3);
+  });
 });
 
 describe('RubygemsRegistryProxy – /info/{name}', () => {
+  beforeEach(() => {
+    mockedGet.mockReset();
+  });
+
   async function handleInfo(
     gemName: string,
     infoText: string,
@@ -281,6 +302,24 @@ describe('RubygemsRegistryProxy – /info/{name}', () => {
 
     expect(res.status).toHaveBeenCalledWith(404);
   });
+
+  it('keeps platform-specific compact-index lines (e.g. 1.17.4-arm64-darwin)', async () => {
+    const res = await handleInfo(
+      'ffi',
+      '---\n1.17.4 |checksum:abc\n1.17.4-arm64-darwin |checksum:def\n',
+      200,
+      [
+        makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'ruby'),
+        makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'arm64-darwin'),
+      ],
+      200,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).toContain('1.17.4 ');
+    expect(body).toContain('1.17.4-arm64-darwin');
+  });
 });
 
 describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
@@ -328,6 +367,37 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       302,
       'https://rubygems.org/gems/aws-sdk-s3-1.0.0.gem',
     );
+  });
+
+  it('allows download of platform-specific gems (e.g. arm64-darwin)', async () => {
+    // The JSON API exposes platform as a separate field while the filename
+    // embeds it as `{number}-{platform}`. The matcher must reconstruct the key.
+    const res = await handle('/gems/ffi-1.17.4-arm64-darwin.gem', [
+      makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'ruby'),
+      makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'arm64-darwin'),
+    ]);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/ffi-1.17.4-arm64-darwin.gem',
+    );
+  });
+
+  it('allows download of multi-segment-platform gems (e.g. x86-mingw32)', async () => {
+    const res = await handle('/gems/mysql-2.9.1-x86-mingw32.gem', [
+      makeVersion('2.9.1', '2024-01-01T00:00:00Z', 'x86-mingw32'),
+    ]);
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/mysql-2.9.1-x86-mingw32.gem',
+    );
+  });
+
+  it('blocks platform-specific download when version is after cutoff', async () => {
+    const res = await handle('/gems/ffi-1.17.4-arm64-darwin.gem', [
+      makeVersion('1.17.4', '2024-02-01T00:00:00Z', 'arm64-darwin'),
+    ]);
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 });
 

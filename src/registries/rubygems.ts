@@ -4,10 +4,23 @@ import { RegistryProxy, type VersionMetadata } from './base.ts';
 
 interface RubyGemVersion {
   number: string;
+  platform?: string;
   created_at: string;
   [key: string]: unknown;
 }
 type CompactIndexMetadata = string;
+
+/**
+ * Build the compact-index version key for a gem JSON entry.
+ *   { number: '1.17.4', platform: 'ruby' }        → '1.17.4'
+ *   { number: '1.17.4', platform: 'arm64-darwin' } → '1.17.4-arm64-darwin'
+ * This key matches both the leading token of compact-index `/info/` lines and
+ * the version segment of gem download filenames.
+ */
+function compactVersionKey(v: RubyGemVersion): string {
+  const platform = v.platform ?? 'ruby';
+  return platform === 'ruby' ? v.number : `${v.number}-${platform}`;
+}
 
 export class RubygemsRegistryProxy extends RegistryProxy {
   readonly name = 'rubygems';
@@ -33,7 +46,9 @@ export class RubygemsRegistryProxy extends RegistryProxy {
         );
         if (response.status !== 200) return null;
 
-        const versionData = response.data.find((v) => v.number === version);
+        const versionData = response.data.find(
+          (v) => compactVersionKey(v) === version,
+        );
         if (!versionData) return null;
 
         return {
@@ -63,9 +78,8 @@ export class RubygemsRegistryProxy extends RegistryProxy {
         return getVersions(metadata, gemName);
       },
       filterMetadata: async (metadata, allowedVersions) => {
-        return metadata.filter((v) =>
-          allowedVersions.some((av) => av.version === v.number),
-        );
+        const allowedKeys = new Set(allowedVersions.map((av) => av.version));
+        return metadata.filter((v) => allowedKeys.has(compactVersionKey(v)));
       },
     });
   }
@@ -137,7 +151,7 @@ function parseGemDownloadUrl(
 function getVersions(metadata: RubyGemVersion[], gemName: string): VersionMetadata[] {
   return metadata.map((v) => ({
     packageName: gemName,
-    version: v.number,
+    version: compactVersionKey(v),
     published: new Date(v.created_at),
   }));
 }
