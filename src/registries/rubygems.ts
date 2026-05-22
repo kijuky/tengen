@@ -35,27 +35,27 @@ export class RubygemsRegistryProxy extends RegistryProxy {
       condition: (req) =>
         req.path.startsWith('/gems/') && req.path.endsWith('.gem'),
       getVersionMetadata: async (req) => {
-        const parsed = parseGemDownloadUrl(req.path);
-        if (!parsed) return null;
-        const { gemName, version } = parsed;
-
+        const candidates = gemDownloadCandidates(req.path);
         const upstreamBase = new URL(this.config.upstream);
-        const response = await axios.get<RubyGemVersion[]>(
-          `${upstreamBase.origin}/api/v1/versions/${gemName}.json`,
-          { validateStatus: () => true, maxRedirects: 0 },
-        );
-        if (response.status !== 200) return null;
+        for (const { gemName, version } of candidates) {
+          const response = await axios.get<RubyGemVersion[]>(
+            `${upstreamBase.origin}/api/v1/versions/${gemName}.json`,
+            { validateStatus: () => true, maxRedirects: 0 },
+          );
+          if (response.status !== 200) continue;
 
-        const versionData = response.data.find(
-          (v) => compactVersionKey(v) === version,
-        );
-        if (!versionData) return null;
+          const versionData = response.data.find(
+            (v) => compactVersionKey(v) === version,
+          );
+          if (!versionData) continue;
 
-        return {
-          packageName: gemName,
-          version,
-          published: new Date(versionData.created_at),
-        };
+          return {
+            packageName: gemName,
+            version,
+            published: new Date(versionData.created_at),
+          };
+        }
+        return null;
       },
     });
 
@@ -130,22 +130,30 @@ export class RubygemsRegistryProxy extends RegistryProxy {
 }
 
 /**
- * Parse a RubyGems gem download path into gem name and version.
- *   /gems/rack-2.2.4.gem       → { gemName: 'rack',       version: '2.2.4' }
- *   /gems/aws-sdk-s3-1.0.0.gem → { gemName: 'aws-sdk-s3', version: '1.0.0' }
+ * Enumerate possible (gemName, version) splits for a gem download path.
+ *   /gems/rack-2.2.4.gem            → [{ rack, 2.2.4 }]
+ *   /gems/aws-sdk-s3-1.0.0.gem      → [{ aws-sdk-s3, 1.0.0 }]
+ *   /gems/mail-iso-2022-jp-2.1.0.gem → [{ mail-iso-2022-jp, 2.1.0 }, { mail-iso, 2022-jp-2.1.0 }]
+ *
+ * Versions start with a digit, but gem names may also contain digit-prefixed
+ * parts (e.g. "iso-2022-jp"), making the split ambiguous from the URL alone.
+ * Candidates are ordered right-to-left so the most plausible split (version
+ * closer to the end) is tried first; callers verify each against upstream.
  */
-function parseGemDownloadUrl(
+function gemDownloadCandidates(
   path: string,
-): { gemName: string; version: string } | null {
+): Array<{ gemName: string; version: string }> {
   const filename = path.slice('/gems/'.length, -'.gem'.length);
   const parts = filename.split('-');
-  // Gem names never start with a digit; versions always do.
-  const versionStartIdx = parts.findIndex((p) => /^\d/.test(p));
-  if (versionStartIdx <= 0) return null;
-  return {
-    gemName: parts.slice(0, versionStartIdx).join('-'),
-    version: parts.slice(versionStartIdx).join('-'),
-  };
+  const candidates: Array<{ gemName: string; version: string }> = [];
+  for (let i = parts.length - 1; i >= 1; i--) {
+    if (!/^\d/.test(parts[i])) continue;
+    candidates.push({
+      gemName: parts.slice(0, i).join('-'),
+      version: parts.slice(i).join('-'),
+    });
+  }
+  return candidates;
 }
 
 function getVersions(metadata: RubyGemVersion[], gemName: string): VersionMetadata[] {

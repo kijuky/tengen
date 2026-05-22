@@ -399,6 +399,105 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.redirect).not.toHaveBeenCalled();
   });
+
+  it('allows download when gem name contains a digit-prefixed segment (e.g. mail-iso-2022-jp)', async () => {
+    // The filename "mail-iso-2022-jp-2.1.0.gem" can be split two ways:
+    //   ["mail-iso-2022-jp", "2.1.0"]  ← correct
+    //   ["mail-iso",         "2022-jp-2.1.0"]
+    // Candidates are verified against upstream; the right-to-left split is
+    // tried first and matches, so only one upstream call is needed here.
+    mockedGet.mockResolvedValueOnce({
+      status: 200,
+      data: [makeVersion('2.1.0', '2024-01-01T00:00:00Z')],
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/gems/mail-iso-2022-jp-2.1.0.gem'),
+      res,
+    );
+    expect(mockedGet).toHaveBeenCalledWith(
+      'https://rubygems.org/api/v1/versions/mail-iso-2022-jp.json',
+      expect.anything(),
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/mail-iso-2022-jp-2.1.0.gem',
+    );
+  });
+
+  it('falls back to a wider gem-name candidate when the narrower one is unknown upstream', async () => {
+    // Hypothetical gem "foo-1bar-2.0.0" where "foo" is not a real gem but
+    // "foo-1bar" is. The first candidate (foo-1bar / 2.0.0) succeeds upstream.
+    mockedGet.mockResolvedValueOnce({
+      status: 200,
+      data: [makeVersion('2.0.0', '2024-01-01T00:00:00Z')],
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/gems/foo-1bar-2.0.0.gem'), res);
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      1,
+      'https://rubygems.org/api/v1/versions/foo-1bar.json',
+      expect.anything(),
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/foo-1bar-2.0.0.gem',
+    );
+  });
+
+  it('tries the next candidate when the upstream versions list does not contain the requested version', async () => {
+    // For "mail-iso-2022-jp-2.1.0.gem", the first split tried is
+    // ["mail-iso-2022-jp", "2.1.0"]. If upstream's mail-iso-2022-jp version
+    // list does not include 2.1.0, we should fall through to the next split
+    // ["mail-iso", "2022-jp-2.1.0"] before giving up.
+    mockedGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: [makeVersion('1.0.0', '2024-01-01T00:00:00Z')], // no 2.1.0
+        headers: {},
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: [makeVersion('2022-jp-2.1.0', '2024-01-01T00:00:00Z')],
+        headers: {},
+      });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/gems/mail-iso-2022-jp-2.1.0.gem'),
+      res,
+    );
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      1,
+      'https://rubygems.org/api/v1/versions/mail-iso-2022-jp.json',
+      expect.anything(),
+    );
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      2,
+      'https://rubygems.org/api/v1/versions/mail-iso.json',
+      expect.anything(),
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      'https://rubygems.org/gems/mail-iso-2022-jp-2.1.0.gem',
+    );
+  });
+
+  it('blocks the download when no candidate matches upstream', async () => {
+    mockedGet.mockResolvedValue({
+      status: 404,
+      data: { error: 'not found' },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq('/gems/mail-iso-2022-jp-2.1.0.gem'),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
 });
 
 describe('RubygemsRegistryProxy – malicious filtering', () => {
