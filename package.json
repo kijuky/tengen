@@ -1,0 +1,29 @@
+{
+  "name": "tengen",
+  "version": "1.0.0",
+  "description": "Package registry proxy with version delay filtering",
+  "type": "module",
+  "bin": {
+    "tengen": "./src/tengen.ts"
+  },
+  "scripts": {
+    "start": "node src/tengen.ts serve",
+    "dev": "node --watch src/tengen.ts serve",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:malicious-db": "node src/tengen.ts build-malicious-db"
+  },
+  "dependencies": {
+    "axios": "^1.14.0",
+    "escape-html": "^1.0.3",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/escape-html": "^1.0.4",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.1.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.2"
+  }
+}

@@ -1,0 +1,113 @@
+import express from 'express';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { loadConfig, type Config } from './config.ts';
+import { MavenRegistryProxy } from './registries/maven.ts';
+import { NpmRegistryProxy } from './registries/npm.ts';
+import { PypiRegistryProxy } from './registries/pypi.ts';
+import { RubygemsRegistryProxy } from './registries/rubygems.ts';
+import { GoRegistryProxy } from './registries/go.ts';
+import { ComposerRegistryProxy } from './registries/composer.ts';
+import { buildMaliciousDB } from './scripts/build-malicious-db.ts';
+
+export function createServer(config: Config): express.Express {
+  const app = express();
+
+  const delayMs = config.delayDays * 24 * 60 * 60 * 1000;
+
+  const maliciousDbPath = config.maliciousDbPath;
+  const registries = [
+    new NpmRegistryProxy({
+      upstream: config.upstreams.npm,
+      delayMs,
+      maliciousDbPath,
+    }),
+    new PypiRegistryProxy({
+      upstream: config.upstreams.pypi,
+      delayMs,
+      maliciousDbPath,
+    }),
+    new RubygemsRegistryProxy({
+      upstream: config.upstreams.rubygems,
+      delayMs,
+      maliciousDbPath,
+    }),
+    new GoRegistryProxy({
+      upstream: config.upstreams.go,
+      delayMs,
+      maliciousDbPath,
+    }),
+    new ComposerRegistryProxy({
+      upstream: config.upstreams.composer,
+      delayMs,
+      maliciousDbPath,
+    }),
+    new MavenRegistryProxy({
+      upstream: config.upstreams.maven,
+      delayMs,
+      maliciousDbPath,
+    }),
+  ];
+
+  for (const registry of registries) {
+    app.use(`/${registry.name}`, (req, res) => {
+      const start = Date.now();
+      console.log(`[${registry.name}] ${req.method} ${req.path}`);
+
+      res.on('finish', () => {
+        const ms = Date.now() - start;
+        console.log(
+          `[${registry.name}] ${req.method} ${req.path} -> ${res.statusCode} (${ms}ms)`,
+        );
+      });
+
+      registry.handleRequest(req, res).catch((err) => {
+        console.error(
+          `[${registry.name}] ${req.method} ${req.path} error:`,
+          err,
+        );
+        if (!res.headersSent) {
+          res
+            .status(500)
+            .json({ error: 'Internal Server Error', message: String(err) });
+        }
+      });
+    });
+  }
+
+  return app;
+}
+
+export async function startServer(
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
+  const config = loadConfig(argv);
+
+  if (config.maliciousDbPath) {
+    if (!existsSync(config.maliciousDbPath)) {
+      console.error(
+        `Error: malicious DB not found at ${config.maliciousDbPath}`,
+      );
+      process.exit(1);
+    }
+  } else {
+    config.maliciousDbPath = join(tmpdir(), 'tengen-malicious-db.json');
+    console.log(
+      `No malicious DB path specified, building into ${config.maliciousDbPath}…`,
+    );
+    await buildMaliciousDB(config.maliciousDbPath);
+    console.log(`Malicious DB built successfully at ${config.maliciousDbPath}`);
+  }
+
+  const app = createServer(config);
+  app.listen(config.port, config.host, () => {
+    console.log(`tengen registry proxy started`);
+    for (const [name, url] of Object.entries(config.upstreams)) {
+      console.log(`  ${name.padEnd(10)}  ${url}`);
+    }
+    console.log(`  delay:      ${config.delayDays} day(s)`);
+    console.log(`  malicious:  ${config.maliciousDbPath}`);
+    console.log(`  listening:  http://${config.host}:${config.port}`);
+  });
+}

@@ -1,0 +1,14 @@
+{
+  "require": {
+    "monolog/monolog": "*"
+  },
+  "repositories": [
+    {
+      "type": "composer",
+      "url": "http://localhost:3000/composer"
+    }
+  ],
+  "config": {
+    "secure-http": false
+  }
+}
