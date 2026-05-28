@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Request, Response } from "express";
-import { RegistryProxy, type VersionMetadata } from "./base.ts";
+import {
+  RegistryProxy,
+  __resetCachesForTesting,
+  type VersionMetadata,
+} from "./base.ts";
 import { makeHandle, makeReq, makeRes } from "./test-helpers.ts";
 
 vi.mock("axios", () => ({
@@ -40,6 +44,7 @@ const handle = makeHandle(metaProxy, mockedGet);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetCachesForTesting();
 });
 
 describe("RegistryProxy – metadata routing", () => {
@@ -204,6 +209,7 @@ describe("RegistryProxy – download routing", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     mockReadFileSync.mockReset();
+    __resetCachesForTesting();
     dlProxy = new DownloadProxy({
       upstream: "https://upstream.example.com",
       delayMs: DELAY_MS,
@@ -384,5 +390,238 @@ describe("RegistryProxy – routing order", () => {
     await p.handleRequest(makeReq("/any"), res);
     expect(res.json).toHaveBeenCalledWith({ ok: true });
     expect(res.redirect).not.toHaveBeenCalled();
+  });
+});
+
+// ── Allowlist ────────────────────────────────────────────────────────────────
+
+const MALICIOUS_PATH = "/test/malicious.json";
+const ALLOWLIST_PATH = "/test/allowlist.json";
+
+class AllowlistDownloadProxy extends RegistryProxy {
+  readonly name = "al-test";
+  readonly getVersionMetadataFn = vi
+    .fn<() => VersionMetadata | null>()
+    .mockReturnValue(null);
+
+  override setRouting() {
+    this.addDownloadRoute({
+      condition: (req) => req.path.startsWith("/pkg/-/"),
+      getVersionMetadata: () => this.getVersionMetadataFn(),
+    });
+  }
+}
+
+function mockDbFiles(opts: {
+  malicious?: Record<string, unknown>;
+  allowlist?: Record<string, unknown>;
+}) {
+  mockReadFileSync.mockImplementation((path: unknown) => {
+    if (path === MALICIOUS_PATH) return JSON.stringify(opts.malicious ?? {});
+    if (path === ALLOWLIST_PATH) return JSON.stringify(opts.allowlist ?? {});
+    throw new Error(`unexpected readFileSync path: ${String(path)}`);
+  });
+}
+
+describe("RegistryProxy – allowlist", () => {
+  const RECENT = new Date(CUTOFF.getTime() + 1000); // after cutoff → normally filtered
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    mockReadFileSync.mockReset();
+    __resetCachesForTesting();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lets a recent version through when its package is allowlisted", async () => {
+    mockDbFiles({
+      allowlist: {
+        "al-test": {
+          allowlistedPackages: ["pkg"],
+          allowlistedVersions: {},
+        },
+      },
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+      allowlistDbPath: ALLOWLIST_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: RECENT,
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
+    );
+  });
+
+  it("lets a recent version through when the specific version is allowlisted", async () => {
+    mockDbFiles({
+      allowlist: {
+        "al-test": {
+          allowlistedPackages: [],
+          allowlistedVersions: { pkg: ["1.0.0"] },
+        },
+      },
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+      allowlistDbPath: ALLOWLIST_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: RECENT,
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
+    );
+  });
+
+  it("does not let a non-allowlisted version of a partially-allowlisted package through", async () => {
+    mockDbFiles({
+      allowlist: {
+        "al-test": {
+          allowlistedPackages: [],
+          allowlistedVersions: { pkg: ["1.0.0"] },
+        },
+      },
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+      allowlistDbPath: ALLOWLIST_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.1",
+      published: RECENT,
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.1.tgz"), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass the malicious DB even when allowlisted", async () => {
+    mockDbFiles({
+      malicious: {
+        "al-test": { maliciousPackages: ["pkg"], maliciousVersions: {} },
+      },
+      allowlist: {
+        "al-test": {
+          allowlistedPackages: ["pkg"],
+          allowlistedVersions: {},
+        },
+      },
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+      allowlistDbPath: ALLOWLIST_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: CUTOFF, // passes age filter, but malicious DB still applies
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("falls back to age-filter-only behaviour when allowlistDbPath is not set", async () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (path === MALICIOUS_PATH) return JSON.stringify({});
+      throw new Error(`unexpected readFileSync path: ${String(path)}`);
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: RECENT,
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("handles missing ecosystem entry in the allowlist file gracefully", async () => {
+    mockDbFiles({
+      allowlist: {
+        "other-ecosystem": {
+          allowlistedPackages: ["pkg"],
+          allowlistedVersions: {},
+        },
+      },
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+      allowlistDbPath: ALLOWLIST_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: RECENT,
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing allowlist file as no allowlist (does not crash)", async () => {
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error("ENOENT: no such file");
+    });
+    const proxy = new AllowlistDownloadProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: DELAY_MS,
+      maliciousDbPath: MALICIOUS_PATH,
+      allowlistDbPath: ALLOWLIST_PATH,
+    });
+    proxy.getVersionMetadataFn.mockReturnValue({
+      packageName: "pkg",
+      version: "1.0.0",
+      published: CUTOFF, // passes age filter
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
+
+    expect(res.redirect).toHaveBeenCalledWith(
+      302,
+      "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
+    );
   });
 });

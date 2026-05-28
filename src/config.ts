@@ -18,6 +18,8 @@ export interface Config {
   delayDays: number;
   /** Path to a single combined malicious DB JSON file */
   maliciousDbPath: string;
+  /** Optional path to a single combined allowlist JSON file */
+  allowlistDbPath?: string;
 }
 
 const OPTIONS = {
@@ -74,6 +76,11 @@ const OPTIONS = {
     default: "",
     description: "Path to the malicious DB JSON file (built automatically into tmpdir when omitted)",
   },
+  "allowlist-db-path": {
+    type: "string" as const,
+    default: "",
+    description: "Path to the allowlist DB JSON file (per-registry exemptions from the age filter)",
+  },
   help: {
     type: "boolean" as const,
     description: "Show this help message",
@@ -115,5 +122,6 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     },
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,
+    allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,
   };
 }
