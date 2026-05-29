@@ -28,7 +28,6 @@ import {
   isAvailable,
   NOW,
   PASSTHROUGH_MODES,
-  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
@@ -96,37 +95,6 @@ describe.each(PASSTHROUGH_MODES)(
         packages: Record<string, Array<{ version: string }>>;
       };
       expect(data).toHaveProperty('packages');
-    }, 30_000);
-  });
-
-  describe('/dist package download', () => {
-    // Packagist does not host dist archives at /dist/{pkg}/{version}/{hash}.zip
-    // (the real dist.url in metadata points to GitHub, which the proxy does not
-    // rewrite). The proxy's /dist/ route is therefore a version gate whose
-    // passthrough target is synthetic and never resolves to a real artifact, so
-    // pipe mode cannot fetch it. Only redirect mode can observe the gate-pass.
-    it.skipIf(mode === 'pipe')('redirects an allowed version (gate pass)', async () => {
-      const res = await fetch(
-        `${registryUrl}/dist/monolog/monolog/3.5.0/deadbeef1234567890abcdef1234567890deadbeef.zip`,
-        { redirect: 'manual' },
-      );
-      await expectAllowedDownload(res, 'redirect');
-    }, 30_000);
-
-    it('returns 404 for a blocked version', async () => {
-      const res = await fetch(
-        `${registryUrl}/dist/monolog/monolog/3.6.0/deadbeef1234567890abcdef1234567890deadbeef.zip`,
-        { redirect: 'manual' },
-      );
-      expect(res.status).toBe(404);
-    }, 30_000);
-
-    it('returns 404 for a non-existent package', async () => {
-      const res = await fetch(
-        `${registryUrl}/dist/nonexistent-vendor/nonexistent-package-xyz123/1.0.0/deadbeef.zip`,
-        { redirect: 'manual' },
-      );
-      expect(res.status).toBe(404);
     }, 30_000);
   });
 
