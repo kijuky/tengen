@@ -32,19 +32,24 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const poetryCmd = isAvailable('poetry') ? 'poetry' : null;
 
+describe.each(PASSTHROUGH_MODES)(
+  'PyPI proxy integration tests (%s mode)',
+  (mode) => {
 let ts: TestServer;
 let server: http.Server;
 let simpleIndexUrl: string;
 let packagesBaseUrl: string;
 
 beforeAll(async () => {
-  ts = await startTestServer();
+  ts = await startTestServer({ passthroughMode: mode });
   server = ts.server;
   simpleIndexUrl = ts.url('pypi') + '/simple/';
   packagesBaseUrl = ts.url('pypi') + '/packages/';
@@ -85,11 +90,19 @@ describe('Simple API filtering (what poetry sees)', () => {
 // Verifies that the download route gates package files on the cutoff date.
 
 describe('tarball download', () => {
-  it('returns 302 for an allowed version', async () => {
+  // This simplified /packages/{filename} path is not a real PyPI download
+  // location (real files live under hash-prefixed dirs on
+  // files.pythonhosted.org). The proxy's download route gates on the version
+  // parsed from the filename, but its passthrough target here is synthetic and
+  // never resolves to a real artifact, so pipe mode cannot fetch it. Only
+  // redirect mode can observe the gate-pass. A real piped download is covered
+  // by uv.test.ts's "tarball download" suite, which derives the hashed URL from
+  // the Simple API.
+  it.skipIf(mode === 'pipe')('redirects an allowed version (gate pass)', async () => {
     const res = await fetch(`${packagesBaseUrl}certifi-2023.7.22.tar.gz`, {
       redirect: 'manual',
     });
-    expect(res.status).toBe(302);
+    await expectAllowedDownload(res, 'redirect');
   }, 30_000);
 
   it('returns 404 for a blocked version', async () => {
@@ -436,3 +449,5 @@ describe.skipIf(!poetryCmd)('poetry lock', () => {
     expect(exitCode).not.toBe(0);
   }, 30_000);
 });
+  },
+);

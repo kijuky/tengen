@@ -28,19 +28,29 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
+import {
+  startTestServer,
+  stopTestServer,
+  runCommand,
+  NOW,
+  isAvailable,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
+} from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const goExists = isAvailable('go');
 
-describe('go module proxy integration tests', () => {
+describe.each(PASSTHROUGH_MODES)(
+  'go module proxy integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let proxyUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     proxyUrl = ts.url('go');
 
@@ -103,30 +113,30 @@ describe('go module proxy integration tests', () => {
   });
 
   describe('/@v/{version}.info (passthrough)', () => {
-    it('redirects .info for an allowed version', async () => {
+    it('passes .info through for an allowed version', async () => {
       const res = await fetch(
         `${proxyUrl}/golang.org/x/text/@v/v0.14.0.info`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
-    it('redirects .info for a blocked version (always passthrough)', async () => {
+    it('passes .info through for a blocked version (always passthrough)', async () => {
       const res = await fetch(
         `${proxyUrl}/golang.org/x/text/@v/v0.15.0.info`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
   });
 
   describe('/@v/{version}.mod', () => {
-    it('returns 302 for an allowed version', async () => {
+    it('serves an allowed version (302 redirect or piped 200)', async () => {
       const res = await fetch(
         `${proxyUrl}/golang.org/x/text/@v/v0.14.0.mod`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version', async () => {
@@ -139,12 +149,12 @@ describe('go module proxy integration tests', () => {
   });
 
   describe('/@v/{version}.zip', () => {
-    it('returns 302 for an allowed version', async () => {
+    it('serves an allowed version (302 redirect or piped 200)', async () => {
       const res = await fetch(
         `${proxyUrl}/github.com/google/uuid/@v/v1.5.0.zip`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version', async () => {
@@ -328,4 +338,5 @@ describe('go module proxy integration tests', () => {
       }, 90_000);
     });
   });
-}); // describe('go module proxy integration tests')
+  },
+); // describe.each('go module proxy integration tests')

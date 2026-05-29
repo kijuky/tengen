@@ -33,19 +33,23 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const bundlerExists = isAvailable('bundle');
 
-describe('rubygems proxy integration tests', () => {
+describe.each(PASSTHROUGH_MODES)(
+  'rubygems proxy integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('rubygems');
 
@@ -284,11 +288,11 @@ describe('rubygems proxy integration tests', () => {
   });
 
   describe('gem tarball download', () => {
-    it('returns 302 for an allowed version', async () => {
+    it('serves an allowed version', async () => {
       const res = await fetch(`${registryUrl}/gems/rack-2.2.8.gem`, {
         redirect: 'manual',
       });
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version', async () => {
@@ -306,4 +310,5 @@ describe('rubygems proxy integration tests', () => {
       expect(res.status).toBe(404);
     }, 30_000);
   });
-});
+  },
+);

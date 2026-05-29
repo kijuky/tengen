@@ -102,6 +102,29 @@ describe("loadConfig", () => {
     expect(config.delayDays).toBe(3);
   });
 
+  it("defaults passthroughMode to redirect", () => {
+    const config = loadConfig([]);
+    expect(config.passthroughMode).toBe("redirect");
+  });
+
+  it("parses --passthrough-mode pipe", () => {
+    const config = loadConfig(["--passthrough-mode", "pipe"]);
+    expect(config.passthroughMode).toBe("pipe");
+  });
+
+  it("exits with an error on an invalid --passthrough-mode", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() => loadConfig(["--passthrough-mode", "bogus"])).toThrow(
+      "process.exit called",
+    );
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
   it("prints help and calls process.exit(0) when --help is passed", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {

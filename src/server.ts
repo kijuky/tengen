@@ -18,42 +18,49 @@ export function createServer(config: Config): express.Express {
 
   const maliciousDbPath = config.maliciousDbPath;
   const allowlistDbPath = config.allowlistDbPath;
+  const passthroughMode = config.passthroughMode;
   const registries = [
     new NpmRegistryProxy({
       upstream: config.upstreams.npm,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
+      passthroughMode,
     }),
     new PypiRegistryProxy({
       upstream: config.upstreams.pypi,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
+      passthroughMode,
     }),
     new RubygemsRegistryProxy({
       upstream: config.upstreams.rubygems,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
+      passthroughMode,
     }),
     new GoRegistryProxy({
       upstream: config.upstreams.go,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
+      passthroughMode,
     }),
     new ComposerRegistryProxy({
       upstream: config.upstreams.composer,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
+      passthroughMode,
     }),
     new MavenRegistryProxy({
       upstream: config.upstreams.maven,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
+      passthroughMode,
     }),
   ];
 
@@ -114,6 +121,7 @@ export async function startServer(
       console.log(`  ${name.padEnd(10)}  ${url}`);
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
+    console.log(`  passthrough: ${config.passthroughMode}`);
     console.log(`  malicious:  ${config.maliciousDbPath}`);
     if (config.allowlistDbPath) {
       console.log(`  allowlist:  ${config.allowlistDbPath}`);

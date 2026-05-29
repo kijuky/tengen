@@ -27,19 +27,23 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const composerExists = isAvailable('composer');
 
-describe('packagist proxy integration tests', () => {
+describe.each(PASSTHROUGH_MODES)(
+  'packagist proxy integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('composer');
 
@@ -96,12 +100,17 @@ describe('packagist proxy integration tests', () => {
   });
 
   describe('/dist package download', () => {
-    it('returns 302 for an allowed version', async () => {
+    // Packagist does not host dist archives at /dist/{pkg}/{version}/{hash}.zip
+    // (the real dist.url in metadata points to GitHub, which the proxy does not
+    // rewrite). The proxy's /dist/ route is therefore a version gate whose
+    // passthrough target is synthetic and never resolves to a real artifact, so
+    // pipe mode cannot fetch it. Only redirect mode can observe the gate-pass.
+    it.skipIf(mode === 'pipe')('redirects an allowed version (gate pass)', async () => {
       const res = await fetch(
         `${registryUrl}/dist/monolog/monolog/3.5.0/deadbeef1234567890abcdef1234567890deadbeef.zip`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, 'redirect');
     }, 30_000);
 
     it('returns 404 for a blocked version', async () => {
@@ -468,4 +477,5 @@ describe('packagist proxy integration tests', () => {
       }, 120_000);
     });
   });
-});
+  },
+);

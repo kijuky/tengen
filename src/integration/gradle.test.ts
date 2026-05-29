@@ -26,19 +26,23 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const gradleExists = isAvailable('gradle');
 
-describe('Maven proxy integration tests (Gradle)', () => {
+describe.each(PASSTHROUGH_MODES)(
+  'Maven proxy integration tests (Gradle) (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('maven');
 
@@ -104,12 +108,12 @@ describe('Maven proxy integration tests (Gradle)', () => {
   // ── Maven artifact download ────────────────────────────────────────────────
 
   describe('Maven artifact download', () => {
-    it('returns 302 for an allowed version POM', async () => {
+    it('serves an allowed version POM', async () => {
       const res = await fetch(
         `${registryUrl}/com/google/code/gson/gson/2.10.1/gson-2.10.1.pom`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version POM', async () => {
@@ -120,12 +124,12 @@ describe('Maven proxy integration tests (Gradle)', () => {
       expect(res.status).toBe(404);
     }, 30_000);
 
-    it('returns 302 for an allowed version JAR', async () => {
+    it('serves an allowed version JAR', async () => {
       const res = await fetch(
         `${registryUrl}/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version JAR', async () => {
@@ -144,12 +148,12 @@ describe('Maven proxy integration tests (Gradle)', () => {
       expect(res.status).toBe(404);
     }, 30_000);
 
-    it('returns 302 for an allowed version JAR SHA1 checksum', async () => {
+    it('serves an allowed version JAR SHA1 checksum', async () => {
       const res = await fetch(
         `${registryUrl}/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar.sha1`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version JAR SHA1 checksum', async () => {
@@ -160,12 +164,12 @@ describe('Maven proxy integration tests (Gradle)', () => {
       expect(res.status).toBe(404);
     }, 30_000);
 
-    it('returns 302 for an allowed version POM MD5 checksum', async () => {
+    it('serves an allowed version POM MD5 checksum', async () => {
       const res = await fetch(
         `${registryUrl}/com/google/code/gson/gson/2.10.1/gson-2.10.1.pom.md5`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version POM MD5 checksum', async () => {
@@ -298,4 +302,5 @@ describe('Maven proxy integration tests (Gradle)', () => {
       expect(exitCode).not.toBe(0);
     }, 120_000);
   });
-});
+  },
+);
