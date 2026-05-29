@@ -1,7 +1,7 @@
 import axios, { type AxiosResponse } from 'axios';
 import type { Request, Response } from 'express';
 import { readFileSync } from 'node:fs';
-import type { MaliciousDb } from '../types.ts';
+import type { AllowlistDb, MaliciousDb } from '../types.ts';
 
 interface RegistryConfig {
   /** Upstream registry base URL */
@@ -10,6 +10,12 @@ interface RegistryConfig {
   delayMs: number;
   /** Path to a single combined malicious DB JSON file (all ecosystems) */
   maliciousDbPath: string;
+  /**
+   * Optional path to a single combined allowlist JSON file (all ecosystems).
+   * Allowlisted entries bypass the age-delay filter; the malicious DB check
+   * still applies so explicitly known-bad versions cannot be re-enabled.
+   */
+  allowlistDbPath?: string;
 }
 
 export interface VersionMetadata {
@@ -69,6 +75,13 @@ interface CustomRouting {
  * `filterMetadata`, and `respond` callbacks.
  */
 let cachedCombinedDb: MaliciousDb | null | undefined;
+let cachedCombinedAllowlist: AllowlistDb | null | undefined;
+
+/** @internal Reset module-level caches. Used by tests; not part of the public API. */
+export function __resetCachesForTesting() {
+  cachedCombinedDb = undefined;
+  cachedCombinedAllowlist = undefined;
+}
 
 export abstract class RegistryProxy {
   /** The human-readable name of this registry (e.g. "npm", "pypi") */
@@ -76,6 +89,10 @@ export abstract class RegistryProxy {
   protected readonly config: RegistryConfig;
   private readonly routing: CustomRouting[] = [];
   private cachedMaliciousDb:
+    | { packages: Set<string>; versions: Map<string, Set<string>> }
+    | null
+    | undefined = undefined;
+  private cachedAllowlist:
     | { packages: Set<string>; versions: Map<string, Set<string>> }
     | null
     | undefined = undefined;
@@ -249,12 +266,59 @@ export abstract class RegistryProxy {
     return this.cachedMaliciousDb;
   }
 
+  private getAllowlistDB(): {
+    packages: Set<string>;
+    versions: Map<string, Set<string>>;
+  } | null {
+    if (this.cachedAllowlist !== undefined) return this.cachedAllowlist;
+    const dbPath = this.config.allowlistDbPath;
+    if (!dbPath) {
+      this.cachedAllowlist = null;
+      return null;
+    }
+    try {
+      if (cachedCombinedAllowlist === undefined) {
+        const content = readFileSync(dbPath, 'utf-8');
+        cachedCombinedAllowlist = JSON.parse(content) as AllowlistDb;
+      }
+      const raw = cachedCombinedAllowlist?.[this.name];
+      if (!raw) {
+        this.cachedAllowlist = null;
+        return null;
+      }
+      this.cachedAllowlist = {
+        packages: new Set(raw.allowlistedPackages),
+        versions: new Map(
+          Object.entries(raw.allowlistedVersions).map(([pkg, vs]) => [
+            pkg,
+            new Set(vs),
+          ]),
+        ),
+      };
+    } catch {
+      this.cachedAllowlist = null;
+    }
+    return this.cachedAllowlist;
+  }
+
   protected filterVersions(versions: VersionMetadata[]) {
+    if (versions.length === 0) return [];
+
+    const allowlist = this.getAllowlistDB();
+    const packageName = versions[0].packageName;
+    const isPackageAllowlisted =
+      allowlist !== null && allowlist.packages.has(packageName);
+    const allowlistedVersionSet = allowlist?.versions.get(packageName);
+
     const cutoffDate = new Date(Date.now() - this.config.delayMs);
-    let filtered = versions.filter((v) => v.published <= cutoffDate);
+    let filtered = versions.filter(
+      (v) =>
+        v.published <= cutoffDate ||
+        isPackageAllowlisted ||
+        allowlistedVersionSet?.has(v.version) === true,
+    );
     if (filtered.length === 0) return [];
 
-    const packageName = filtered[0].packageName;
     const db = this.getMaliciousDB();
     if (db !== null) {
       if (db.packages.has(packageName)) {

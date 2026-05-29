@@ -17,36 +17,43 @@ export function createServer(config: Config): express.Express {
   const delayMs = config.delayDays * 24 * 60 * 60 * 1000;
 
   const maliciousDbPath = config.maliciousDbPath;
+  const allowlistDbPath = config.allowlistDbPath;
   const registries = [
     new NpmRegistryProxy({
       upstream: config.upstreams.npm,
       delayMs,
       maliciousDbPath,
+      allowlistDbPath,
     }),
     new PypiRegistryProxy({
       upstream: config.upstreams.pypi,
       delayMs,
       maliciousDbPath,
+      allowlistDbPath,
     }),
     new RubygemsRegistryProxy({
       upstream: config.upstreams.rubygems,
       delayMs,
       maliciousDbPath,
+      allowlistDbPath,
     }),
     new GoRegistryProxy({
       upstream: config.upstreams.go,
       delayMs,
       maliciousDbPath,
+      allowlistDbPath,
     }),
     new ComposerRegistryProxy({
       upstream: config.upstreams.composer,
       delayMs,
       maliciousDbPath,
+      allowlistDbPath,
     }),
     new MavenRegistryProxy({
       upstream: config.upstreams.maven,
       delayMs,
       maliciousDbPath,
+      allowlistDbPath,
     }),
   ];
 
@@ -108,6 +115,9 @@ export async function startServer(
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
     console.log(`  malicious:  ${config.maliciousDbPath}`);
+    if (config.allowlistDbPath) {
+      console.log(`  allowlist:  ${config.allowlistDbPath}`);
+    }
     console.log(`  listening:  http://${config.host}:${config.port}`);
   });
 }
