@@ -90,19 +90,29 @@ describe('Simple API filtering (what poetry sees)', () => {
 // Verifies that the download route gates package files on the cutoff date.
 
 describe('tarball download', () => {
-  // This simplified /packages/{filename} path is not a real PyPI download
-  // location (real files live under hash-prefixed dirs on
-  // files.pythonhosted.org). The proxy's download route gates on the version
-  // parsed from the filename, but its passthrough target here is synthetic and
-  // never resolves to a real artifact, so pipe mode cannot fetch it. Only
-  // redirect mode can observe the gate-pass. A real piped download is covered
-  // by uv.test.ts's "tarball download" suite, which derives the hashed URL from
-  // the Simple API.
-  it.skipIf(mode === 'pipe')('redirects an allowed version (gate pass)', async () => {
-    const res = await fetch(`${packagesBaseUrl}certifi-2023.7.22.tar.gz`, {
-      redirect: 'manual',
+  // PyPI download URLs are hash-addressed (files.pythonhosted.org/packages/<hash>/…),
+  // so mirror what poetry actually does: fetch the proxied Simple API to obtain
+  // the real proxy-relative download path, then request that. This exercises the
+  // gate-pass on the same URL shape clients receive in normal operation, in both
+  // redirect and pipe modes.
+  it('serves an allowed version (gate pass)', async () => {
+    const indexRes = await fetch(`${simpleIndexUrl}certifi/`, {
+      headers: { Accept: 'application/vnd.pypi.simple.v1+json' },
     });
-    await expectAllowedDownload(res, 'redirect');
+    expect(indexRes.status).toBe(200);
+    const data = (await indexRes.json()) as {
+      files: Array<{ filename: string; url: string }>;
+    };
+    const allowed = data.files.find(
+      (f) => f.filename === 'certifi-2023.7.22.tar.gz',
+    );
+    expect(allowed).toBeDefined();
+
+    // The Simple API rewrites file URLs to proxy-relative paths (/pypi/packages/…);
+    // prepend the proxy origin to make the URL absolute.
+    const proxyOrigin = new URL(ts.url('pypi')).origin;
+    const res = await fetch(proxyOrigin + allowed!.url, { redirect: 'manual' });
+    await expectAllowedDownload(res, mode);
   }, 30_000);
 
   it('returns 404 for a blocked version', async () => {
