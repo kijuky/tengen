@@ -18,7 +18,7 @@ interface RegistryConfig {
   allowlistDbPath?: string;
   /**
    * How passthrough/download requests are served. "redirect" (default) responds
-   * with a 302/307 to the upstream URL; "pipe" streams the upstream response
+   * with a 307 to the upstream URL; "pipe" streams the upstream response
    * back through the proxy so clients never talk to the upstream directly.
    */
   passthroughMode?: 'redirect' | 'pipe';
@@ -258,11 +258,10 @@ export abstract class RegistryProxy {
       return;
     }
     const url = this.buildUpstreamUrl(req);
-    // Use 307 for non-GET/HEAD requests so the client preserves the original
-    // HTTP method (e.g. POST for npm audit). 302 allows clients to switch to
-    // GET, which causes upstream to return 405 Method Not Allowed.
-    const status = req.method === 'GET' || req.method === 'HEAD' ? 302 : 307;
-    res.redirect(status, url);
+    // Always use 307 so the client preserves the original HTTP method (e.g.
+    // POST for npm audit). 302 allows clients to switch to GET, which causes
+    // upstream to return 405 Method Not Allowed.
+    res.redirect(307, url);
   }
 
   /**

@@ -22,7 +22,7 @@ export interface Config {
   allowlistDbPath?: string;
   /**
    * How passthrough/download requests are served:
-   * - "redirect": respond with a 302/307 pointing at the upstream URL
+   * - "redirect": respond with a 307 pointing at the upstream URL
    * - "pipe": stream the upstream response back through the proxy
    */
   passthroughMode: "redirect" | "pipe";
@@ -91,7 +91,7 @@ const OPTIONS = {
     type: "string" as const,
     default: "redirect",
     description:
-      "How to serve passthrough/download requests: 'redirect' (302/307 to upstream) or 'pipe' (stream the upstream response through the proxy)",
+      "How to serve passthrough/download requests: 'redirect' (307 to upstream) or 'pipe' (stream the upstream response through the proxy)",
   },
   help: {
     type: "boolean" as const,

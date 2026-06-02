@@ -85,7 +85,7 @@ describe('PypiRegistryProxy – routing', () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq('/packages/requests-2.28.0.tar.gz'), res);
     expect(res.send).not.toHaveBeenCalled();
-    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/requests-2.28.0.tar.gz');
+    expect(res.redirect).toHaveBeenCalledWith(307, 'https://pypi.org/packages/requests-2.28.0.tar.gz');
   });
 });
 
@@ -427,7 +427,7 @@ describe('PypiRegistryProxy – download route (/packages/...)', () => {
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
     const res = makeRes();
     await proxy.handleRequest(makeReq('/packages/requests-2.28.0.tar.gz'), res);
-    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/requests-2.28.0.tar.gz');
+    expect(res.redirect).toHaveBeenCalledWith(307, 'https://pypi.org/packages/requests-2.28.0.tar.gz');
   });
 
   it('redirects .whl artifact when version is within delay', async () => {
@@ -440,7 +440,7 @@ describe('PypiRegistryProxy – download route (/packages/...)', () => {
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
     const res = makeRes();
     await proxy.handleRequest(makeReq('/packages/requests-2.28.0-py3-none-any.whl'), res);
-    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/requests-2.28.0-py3-none-any.whl');
+    expect(res.redirect).toHaveBeenCalledWith(307, 'https://pypi.org/packages/requests-2.28.0-py3-none-any.whl');
   });
 
   it('redirects artifact at nested /packages/{a}/{b}/{c}/{file} path', async () => {
@@ -453,7 +453,7 @@ describe('PypiRegistryProxy – download route (/packages/...)', () => {
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
     const res = makeRes();
     await proxy.handleRequest(makeReq('/packages/ab/cd/ef123/requests-2.28.0.tar.gz'), res);
-    expect(res.redirect).toHaveBeenCalledWith(302, 'https://pypi.org/packages/ab/cd/ef123/requests-2.28.0.tar.gz');
+    expect(res.redirect).toHaveBeenCalledWith(307, 'https://pypi.org/packages/ab/cd/ef123/requests-2.28.0.tar.gz');
   });
 
   it('returns 404 when version is too new', async () => {
@@ -504,7 +504,7 @@ describe('PypiRegistryProxy – download route (/packages/...)', () => {
       res,
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://pypi.org/packages/5c/f9/abc/boto3-1.35.90-py3-none-any.whl.metadata',
     );
   });
@@ -546,7 +546,7 @@ describe('PypiRegistryProxy – namespace packages with dots in name', () => {
       expect.anything(),
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       expect.stringContaining('ruamel.yaml.clib-0.2.14-cp314-cp314-macosx_15_0_arm64.whl'),
     );
   });
@@ -569,7 +569,7 @@ describe('PypiRegistryProxy – namespace packages with dots in name', () => {
       expect.anything(),
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       expect.stringContaining('ruamel.yaml.clib-0.2.14.tar.gz'),
     );
   });

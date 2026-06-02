@@ -131,7 +131,7 @@ describe.each(PASSTHROUGH_MODES)(
   });
 
   describe('/@v/{version}.mod', () => {
-    it('serves an allowed version (302 redirect or piped 200)', async () => {
+    it('serves an allowed version (307 redirect or piped 200)', async () => {
       const res = await fetch(
         `${proxyUrl}/golang.org/x/text/@v/v0.14.0.mod`,
         { redirect: 'manual' },
@@ -149,7 +149,7 @@ describe.each(PASSTHROUGH_MODES)(
   });
 
   describe('/@v/{version}.zip', () => {
-    it('serves an allowed version (302 redirect or piped 200)', async () => {
+    it('serves an allowed version (307 redirect or piped 200)', async () => {
       const res = await fetch(
         `${proxyUrl}/github.com/google/uuid/@v/v1.5.0.zip`,
         { redirect: 'manual' },

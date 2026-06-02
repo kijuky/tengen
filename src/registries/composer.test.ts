@@ -61,7 +61,7 @@ describe('ComposerRegistryProxy – routing', () => {
   it('redirects non-metadata paths as passthrough', async () => {
     const res = await handle('/downloads/vendor/package/1.0.0.zip', {});
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://packagist.org/downloads/vendor/package/1.0.0.zip',
     );
   });

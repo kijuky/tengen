@@ -143,12 +143,12 @@ describe("RegistryProxy – metadata routing", () => {
 });
 
 describe("RegistryProxy – passthrough", () => {
-  it("redirects to the upstream URL with 302", async () => {
+  it("redirects to the upstream URL with 307", async () => {
     const res = makeRes();
     await metaProxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz",
     );
     expect(mockedGet).not.toHaveBeenCalled();
@@ -162,7 +162,7 @@ describe("RegistryProxy – passthrough", () => {
     );
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz?foo=bar",
     );
   });
@@ -350,7 +350,7 @@ describe("RegistryProxy – download routing", () => {
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });
@@ -434,7 +434,7 @@ describe("RegistryProxy – download routing", () => {
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/other/path"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/other/path",
     );
     expect(dlProxy.getVersionMetadataFn).not.toHaveBeenCalled();
@@ -493,7 +493,7 @@ describe("RegistryProxy – routing order", () => {
     const res = makeRes();
     await p.handleRequest(makeReq("/any"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/any",
     );
     expect(mockedGet).not.toHaveBeenCalled();
@@ -581,7 +581,7 @@ describe("RegistryProxy – allowlist", () => {
     await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });
@@ -610,7 +610,7 @@ describe("RegistryProxy – allowlist", () => {
     await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });
@@ -740,7 +740,7 @@ describe("RegistryProxy – allowlist", () => {
     await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });

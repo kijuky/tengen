@@ -572,7 +572,7 @@ describe.each(PASSTHROUGH_MODES)('npm tarball download (%s mode)', (mode) => {
     await stopTestServer(server);
   });
 
-  it('serves an allowed version (302 redirect or piped 200)', async () => {
+  it('serves an allowed version (307 redirect or piped 200)', async () => {
     const res = await fetch(`${registryUrl}/lodash/-/lodash-4.17.21.tgz`, {
       redirect: 'manual',
     });
@@ -586,7 +586,7 @@ describe.each(PASSTHROUGH_MODES)('npm tarball download (%s mode)', (mode) => {
     expect(res.status).toBe(404);
   }, 30_000);
 
-  it('serves an allowed scoped package version (302 redirect or piped 200)', async () => {
+  it('serves an allowed scoped package version (307 redirect or piped 200)', async () => {
     const res = await fetch(`${registryUrl}/@babel/core/-/core-7.0.0.tgz`, {
       redirect: 'manual',
     });

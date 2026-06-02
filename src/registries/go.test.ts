@@ -199,7 +199,7 @@ describe("GoRegistryProxy.handleRequest - passthrough", () => {
   it("redirects .info requests", async () => {
     const res = await handle("/github.com/foo/bar/@v/v1.0.0.info", {});
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.info",
     );
   });
@@ -215,7 +215,7 @@ describe("GoRegistryProxy.handleRequest - download (.zip/.mod)", () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/v1.0.0.mod"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.mod",
     );
   });
@@ -229,7 +229,7 @@ describe("GoRegistryProxy.handleRequest - download (.zip/.mod)", () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq("/github.com/foo/bar/@v/v1.0.0.zip"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://proxy.golang.org/github.com/foo/bar/@v/v1.0.0.zip",
     );
   });

@@ -79,7 +79,7 @@ describe('RubygemsRegistryProxy – routing', () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq('/quick/Marshal.4.8/rails-7.0.0.gemspec.rz'), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/quick/Marshal.4.8/rails-7.0.0.gemspec.rz',
     );
   });
@@ -332,7 +332,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       makeVersion('7.0.0', '2024-01-01T00:00:00Z'), // before cutoff → allowed
     ]);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/rails-7.0.0.gem',
     );
   });
@@ -364,7 +364,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       makeVersion('1.0.0', '2024-01-01T00:00:00Z'),
     ]);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/aws-sdk-s3-1.0.0.gem',
     );
   });
@@ -377,7 +377,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       makeVersion('1.17.4', '2024-01-01T00:00:00Z', 'arm64-darwin'),
     ]);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/ffi-1.17.4-arm64-darwin.gem',
     );
   });
@@ -387,7 +387,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       makeVersion('2.9.1', '2024-01-01T00:00:00Z', 'x86-mingw32'),
     ]);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/mysql-2.9.1-x86-mingw32.gem',
     );
   });
@@ -421,7 +421,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       expect.anything(),
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/mail-iso-2022-jp-2.1.0.gem',
     );
   });
@@ -442,7 +442,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       expect.anything(),
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/foo-1bar-2.0.0.gem',
     );
   });
@@ -479,7 +479,7 @@ describe('RubygemsRegistryProxy – /gems/{name}-{version}.gem', () => {
       expect.anything(),
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://rubygems.org/gems/mail-iso-2022-jp-2.1.0.gem',
     );
   });

@@ -23,18 +23,18 @@ export type PassthroughMode = (typeof PASSTHROUGH_MODES)[number];
 
 /**
  * Expected HTTP status for an *allowed* download given the passthrough mode.
- * Redirect mode answers with a 302 to the upstream; pipe mode streams the
+ * Redirect mode answers with a 307 to the upstream; pipe mode streams the
  * upstream response back, so the client sees the upstream's own 200.
  */
 export function allowedDownloadStatus(mode: PassthroughMode): number {
-  return mode === 'pipe' ? 200 : 302;
+  return mode === 'pipe' ? 200 : 307;
 }
 
 /**
  * Assert that a download was allowed under the given passthrough mode, then
  * release the response body.
  *
- * - redirect: the proxy answers 302 with no body (cancel the empty stream).
+ * - redirect: the proxy answers 307 with no body (cancel the empty stream).
  * - pipe: the proxy streams the upstream artifact back as 200; the body must be
  *   drained so the proxy↔upstream stream completes, and is asserted non-empty
  *   for GET (HEAD has no body).
