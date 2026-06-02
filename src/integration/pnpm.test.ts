@@ -335,6 +335,11 @@ describe.skipIf(!pnpmExists).each(PASSTHROUGH_MODES)(
           `--registry=${registryUrl}`,
           '--ignore-scripts',
           '--frozen-lockfile',
+          // The proxy returns 404 for the blocked tarball. pnpm treats that as a
+          // transient failure and retries with exponential backoff (~15s total)
+          // before giving up. The assertion only cares that the install fails,
+          // so disable retries to fail fast instead of waiting out the backoff.
+          '--fetch-retries=0',
           '--store-dir',
           join(tmpDir, '.pnpm-store'),
         ],
