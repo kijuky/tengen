@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { Request, Response } from 'express';
+import { createHash } from 'node:crypto';
 import { RegistryProxy, type VersionMetadata } from './base.ts';
 
 interface RubyGemVersion {
@@ -65,6 +66,14 @@ export class RubygemsRegistryProxy extends RegistryProxy {
         this.getCompactIndexVersions(metadata, req),
       filterMetadata: filterCompactIndexMetadata,
       respond: (res, filteredMetadata) => {
+        // Bundler's compact-index protocol verifies the downloaded /info body
+        // against the response ETag, which RubyGems sets to the MD5 hex digest
+        // of the file (quoted). We rewrite the body to drop versions past the
+        // cutoff, so the ETag must be recomputed over the filtered content;
+        // otherwise Express emits its default SHA1-based ETag, bundler's
+        // checksum check fails, and `bundle install` aborts with GemNotFound.
+        const etag = `"${createHash('md5').update(filteredMetadata).digest('hex')}"`;
+        res.setHeader('ETag', etag);
         res.status(200).type('text/plain').send(filteredMetadata);
       },
     });
