@@ -387,6 +387,12 @@ describe.skipIf(!yarnExists).each(PASSTHROUGH_MODES)(
           'nodeLinker: node-modules',
           'cacheFolder: "./.yarn-cache"',
           'enableScripts: false',
+          // Berry flips enableImmutableInstalls to true whenever $CI is set, so
+          // under CI the lockfile-generating `install` in beforeEach would abort
+          // with YN0028 (lockfile would be created). Pin it false so the suite
+          // behaves the same locally and in CI; the immutable tests pass
+          // --immutable explicitly, which still overrides this.
+          'enableImmutableInstalls: false',
         ].join('\n') + '\n',
       );
     }
