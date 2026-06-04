@@ -9,10 +9,15 @@ vi.mock("axios", () => ({
 vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
 }));
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(),
+}));
 
 const mockReadFileSync = vi.mocked(readFileSync);
 
 import axios from "axios";
+import { lookup } from "node:dns/promises";
+const mockLookup = vi.mocked(lookup);
 
 const DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 const CUTOFF = new Date("2024-01-15T00:00:00Z");
@@ -152,6 +157,88 @@ describe("GradlePluginsRegistryProxy – metadata filtering", () => {
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).toContain("<version>1.0.0</version>");
     expect(body).not.toContain("<version>2.0.0</version>");
+  });
+});
+
+describe("GradlePluginsRegistryProxy – 303 metadata redirects", () => {
+  it("follows a 303 to a public host and filters the resolved metadata", async () => {
+    const xml = makeXml(["1.0.0", "2.0.0"]);
+    const resolvedUrl =
+      "https://cdn.example.com/org/example/my-plugin/maven-metadata.xml";
+    mockLookup.mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+    ] as never);
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({
+        status: 303,
+        data: "",
+        headers: { location: resolvedUrl },
+      })
+      .mockResolvedValueOnce({ status: 200, data: xml, headers: {} })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          versions: [
+            {
+              versionKey: { version: "1.0.0" },
+              publishedAt: new Date(BEFORE_CUTOFF).toISOString(),
+            },
+            {
+              versionKey: { version: "2.0.0" },
+              publishedAt: new Date(AFTER_CUTOFF).toISOString(),
+            },
+          ],
+        },
+        headers: {},
+      });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/org/example/my-plugin/maven-metadata.xml"),
+      res,
+    );
+    // followed the 303 to fetch the resolved metadata
+    expect(vi.mocked(axios.get).mock.calls[1][0]).toBe(resolvedUrl);
+    expect(res.status).toHaveBeenCalledWith(200);
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).toContain("<version>1.0.0</version>");
+    expect(body).not.toContain("<version>2.0.0</version>");
+  });
+
+  it("does not follow a 303 to an internal address (SSRF guard)", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 303,
+      data: "",
+      headers: {
+        "content-type": "text/html",
+        location: "https://169.254.169.254/latest/meta-data/",
+      },
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/org/example/my-plugin/maven-metadata.xml"),
+      res,
+    );
+    // never fetched the internal target nor the search API; forwarded the 303
+    expect(vi.mocked(axios.get)).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(303);
+  });
+
+  it("does not follow a 303 to a non-https target (SSRF guard)", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 303,
+      data: "",
+      headers: {
+        "content-type": "text/html",
+        location: "http://93.184.216.34/org/example/my-plugin/maven-metadata.xml",
+      },
+    });
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/org/example/my-plugin/maven-metadata.xml"),
+      res,
+    );
+    expect(vi.mocked(axios.get)).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(303);
   });
 });
 

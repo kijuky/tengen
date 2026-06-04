@@ -64,7 +64,7 @@ export class MavenRegistryProxy extends RegistryProxy {
     };
   }
 
-  private async fetchUpstreamXml(req: Request) {
+  protected async fetchUpstreamXml(req: Request) {
     const base = this.config.upstream.replace(/\/$/, '');
     return axios.get<string>(`${base}${getXmlPath(req.path)}`, {
       responseType: 'text',
