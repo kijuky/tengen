@@ -7,11 +7,14 @@
  *   - berry (v2+):  uses .yarnrc.yml, --immutable, berry lockfile format
  *
  * Both patterns run regardless of which yarn version is currently installed.
- * Version switching uses `yarn set version` (yarn built-in, no corepack required):
+ * The other line is fetched into a shared temp dir on demand:
  *
  *   classic system → berry tests:
- *     `yarn set version berry` downloads the berry CJS bundle into a shared temp dir.
- *     Tests invoke it directly as `node <path-to-berry.cjs>`.
+ *     `npm install @yarnpkg/cli-dist` pulls the berry CJS bundle from npm. (We do
+ *     not use `yarn set version berry`: with Corepack enabled it writes the
+ *     package.json `packageManager` field instead of a .yarnrc.yml yarnPath, which
+ *     is Corepack-state-dependent and breaks on the self-hosted runner.)
+ *     Tests invoke the bundle directly as `node <…/cli-dist/bin/yarn.js>`.
  *
  *   berry system  → classic tests:
  *     `yarn set version 1.22.22` downloads classic into a shared temp dir.
@@ -330,21 +333,28 @@ describe.skipIf(!yarnExists).each(PASSTHROUGH_MODES)(
           join(berryDownloadDir, 'package.json'),
           JSON.stringify({ name: 'dl', version: '1.0.0', private: true }),
         );
-        const res = await runCommand('yarn', ['set', 'version', 'berry'], {
-          cwd: berryDownloadDir,
-          timeout: 60_000,
-        });
-        // runCommand swallows the exit code, so a failed download otherwise only
-        // surfaces later as a confusing ENOENT when resolveYarnPath can't find the
-        // .yarnrc.yml that was never written. Surface the real error here instead.
+        // `yarn set version berry` only writes a .yarnrc.yml (yarnPath) when
+        // Corepack is disabled; with Corepack enabled — as on the self-hosted CI
+        // runner, where it persists between jobs — it updates the package.json
+        // `packageManager` field and downloads via Corepack instead, leaving no
+        // .yarnrc.yml for resolveYarnPath to read. Pull the berry bundle from npm
+        // instead (published as @yarnpkg/cli-dist): deterministic, independent of
+        // Corepack, and routed through the same registry as `npm ci`. Invoked as
+        // `node <bin/yarn.js>`, it bypasses the `yarn` shim entirely.
+        const res = await runCommand(
+          'npm',
+          ['install', '--no-save', '--no-package-lock', '@yarnpkg/cli-dist'],
+          { cwd: berryDownloadDir, timeout: 120_000 },
+        );
         if (res.exitCode !== 0) {
           throw new Error(
-            `\`yarn set version berry\` failed (exit ${res.exitCode}):\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
+            `failed to install @yarnpkg/cli-dist (exit ${res.exitCode}):\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
           );
         }
-        const berryBinPath = resolveYarnPath(berryDownloadDir);
         berryBin = 'node';
-        berryBinArgs = [berryBinPath];
+        berryBinArgs = [
+          join(berryDownloadDir, 'node_modules', '@yarnpkg', 'cli-dist', 'bin', 'yarn.js'),
+        ];
       }
     });
 
