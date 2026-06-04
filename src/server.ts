@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadConfig, type Config } from './config.ts';
 import { MavenRegistryProxy } from './registries/maven.ts';
+import { GradlePluginsRegistryProxy } from './registries/gradle-plugins.ts';
 import { NpmRegistryProxy } from './registries/npm.ts';
 import { PypiRegistryProxy } from './registries/pypi.ts';
 import { RubygemsRegistryProxy } from './registries/rubygems.ts';
@@ -57,6 +58,13 @@ export function createServer(config: Config): express.Express {
     }),
     new MavenRegistryProxy({
       upstream: config.upstreams.maven,
+      delayMs,
+      maliciousDbPath,
+      allowlistDbPath,
+      passthroughMode,
+    }),
+    new GradlePluginsRegistryProxy({
+      upstream: config.upstreams.gradlePlugins,
       delayMs,
       maliciousDbPath,
       allowlistDbPath,

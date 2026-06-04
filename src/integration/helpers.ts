@@ -60,6 +60,7 @@ const DEFAULT_UPSTREAMS = {
   go: 'https://proxy.golang.org',
   composer: 'https://packagist.org',
   maven: 'https://repo.maven.apache.org/maven2',
+  gradlePlugins: 'https://plugins.gradle.org/m2',
 };
 
 export interface TestServer {

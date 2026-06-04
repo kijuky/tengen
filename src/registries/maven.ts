@@ -18,7 +18,7 @@ interface DepsDevVersionResponse {
 }
 
 export class MavenRegistryProxy extends RegistryProxy {
-  readonly name = 'maven';
+  readonly name: string = 'maven';
 
   /**
    * Routes requests:
