@@ -330,10 +330,18 @@ describe.skipIf(!yarnExists).each(PASSTHROUGH_MODES)(
           join(berryDownloadDir, 'package.json'),
           JSON.stringify({ name: 'dl', version: '1.0.0', private: true }),
         );
-        await runCommand('yarn', ['set', 'version', 'berry'], {
+        const res = await runCommand('yarn', ['set', 'version', 'berry'], {
           cwd: berryDownloadDir,
           timeout: 60_000,
         });
+        // runCommand swallows the exit code, so a failed download otherwise only
+        // surfaces later as a confusing ENOENT when resolveYarnPath can't find the
+        // .yarnrc.yml that was never written. Surface the real error here instead.
+        if (res.exitCode !== 0) {
+          throw new Error(
+            `\`yarn set version berry\` failed (exit ${res.exitCode}):\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`,
+          );
+        }
         const berryBinPath = resolveYarnPath(berryDownloadDir);
         berryBin = 'node';
         berryBinArgs = [berryBinPath];
