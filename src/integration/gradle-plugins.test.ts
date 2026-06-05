@@ -25,6 +25,7 @@ import {
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 const MARKER =
   'com/diffplug/spotless/com.diffplug.spotless.gradle.plugin';
@@ -80,11 +81,33 @@ describe.each(PASSTHROUGH_MODES)(
         expect((await res.text()).trim()).toMatch(/^[0-9a-f]{40}$/);
       }, 30_000);
 
-      it('returns 404 for a non-existent marker', async () => {
-        const res = await fetch(
-          `${registryUrl}/com/example/nonexistent-tengen-xyz/com.example.nonexistent-tengen-xyz.gradle.plugin/maven-metadata.xml`,
+      it('propagates upstream 404 for a non-existent marker', async () => {
+        // The live portal answers unknown-plugin metadata lookups with 429
+        // (anti-scraping), which the shared CI runner IP reliably trips — making
+        // it the wrong upstream for asserting 404-propagation. Point a throwaway
+        // proxy at a local upstream that returns a genuine 404 and verify the
+        // proxy surfaces it unchanged.
+        const upstream = http.createServer((_req, res) => {
+          res.statusCode = 404;
+          res.end('not found');
+        });
+        await new Promise<void>((resolve) =>
+          upstream.listen(0, '127.0.0.1', resolve),
         );
-        expect(res.status).toBe(404);
+        const { port } = upstream.address() as AddressInfo;
+        const fakeTs = await startTestServer({
+          passthroughMode: mode,
+          upstreams: { gradlePlugins: `http://127.0.0.1:${port}` },
+        });
+        try {
+          const res = await fetch(
+            `${fakeTs.url('gradle-plugins')}/com/example/nonexistent-tengen-xyz/com.example.nonexistent-tengen-xyz.gradle.plugin/maven-metadata.xml`,
+          );
+          expect(res.status).toBe(404);
+        } finally {
+          await stopTestServer(fakeTs.server);
+          await new Promise<void>((resolve) => upstream.close(() => resolve()));
+        }
       }, 30_000);
     });
 

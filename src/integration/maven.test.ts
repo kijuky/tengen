@@ -189,15 +189,25 @@ describe.each(PASSTHROUGH_MODES)(
     // transitive deps added in later releases.
     const MVN_DEP_PLUGIN = 'org.apache.maven.plugins:maven-dependency-plugin:3.1.2';
 
-    // sharedM2 holds a pre-warmed local repo with only the plugin downloaded.
-    // Each test copies it as its starting .m2 so the plugin is never re-fetched,
-    // while test artifacts (commons-lang3 etc.) are absent and still resolved
-    // through the proxy — keeping proxy behaviour under test per invocation.
+    // A throwaway allowed artifact used only to pre-warm the plugin closure.
+    // commons-io 2.11.0 (2021-09-27, before cutoff) is allowed and has no compile
+    // dependencies, so warming with it never caches the test artifact.
+    const WARMUP_ARTIFACT = 'commons-io:commons-io:2.11.0';
+
+    // sharedM2 holds a pre-warmed local repo containing the dependency-plugin and
+    // the *full transitive closure* every test goal (get/copy/resolve) needs.
+    // Each test copies it as its starting .m2 so that closure is never re-fetched,
+    // while the test artifact (commons-lang3) is absent and still resolved through
+    // the proxy — keeping proxy behaviour under test per invocation. Without this
+    // every invocation re-resolves ~600 plugin-closure artifacts through the
+    // proxy, each triggering an upstream publish-date lookup, which blows past the
+    // 60s per-test timeout.
     let sharedM2: string;
     let tmpDir: string;
 
     beforeAll(async () => {
       sharedM2 = mkdtempSync(join(tmpdir(), 'tengen-mvn-shared-'));
+      const warmupRepo = join(sharedM2, 'repo');
       const warmupSettings = join(sharedM2, 'settings.xml');
       writeFileSync(
         warmupSettings,
@@ -211,22 +221,53 @@ describe.each(PASSTHROUGH_MODES)(
   </mirrors>
 </settings>`,
       );
-      // Download the plugin (and its transitive deps) once into the shared cache.
-      // dependency:help has requiresProject=false so no pom.xml is needed.
+      const baseArgs = [
+        `-Dmaven.repo.local=${warmupRepo}`,
+        '-s',
+        warmupSettings,
+        '--batch-mode',
+        '--no-transfer-progress',
+        '-q',
+      ];
+      // get/copy have requiresProject=false; resolve needs a pom, written below.
+      await runCommand(
+        'mvn',
+        [`${MVN_DEP_PLUGIN}:get`, `-Dartifact=${WARMUP_ARTIFACT}`, ...baseArgs],
+        { cwd: sharedM2, timeout: 120_000 },
+      );
       await runCommand(
         'mvn',
         [
-          `${MVN_DEP_PLUGIN}:help`,
-          `-Dmaven.repo.local=${join(sharedM2, 'repo')}`,
-          '-s',
-          warmupSettings,
-          '--batch-mode',
-          '--no-transfer-progress',
-          '-q',
+          `${MVN_DEP_PLUGIN}:copy`,
+          `-Dartifact=${WARMUP_ARTIFACT}`,
+          `-DoutputDirectory=${join(sharedM2, 'warmup-out')}`,
+          ...baseArgs,
         ],
-        { cwd: sharedM2, timeout: 60_000 },
+        { cwd: sharedM2, timeout: 120_000 },
       );
-    }, 120_000);
+      writeFileSync(
+        join(sharedM2, 'pom.xml'),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test</groupId>
+  <artifactId>tengen-mvn-warmup</artifactId>
+  <version>1.0-SNAPSHOT</version>
+  <dependencies>
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>2.11.0</version>
+    </dependency>
+  </dependencies>
+</project>`,
+      );
+      await runCommand(
+        'mvn',
+        [`${MVN_DEP_PLUGIN}:resolve`, ...baseArgs],
+        { cwd: sharedM2, timeout: 120_000 },
+      );
+    }, 600_000);
 
     afterAll(() => {
       rmSync(sharedM2, { recursive: true, force: true });
