@@ -82,11 +82,15 @@ describe.each(PASSTHROUGH_MODES)(
       }, 30_000);
 
       it('propagates upstream 404 for a non-existent marker', async () => {
-        // The live portal answers unknown-plugin metadata lookups with 429
-        // (anti-scraping), which the shared CI runner IP reliably trips — making
-        // it the wrong upstream for asserting 404-propagation. Point a throwaway
-        // proxy at a local upstream that returns a genuine 404 and verify the
-        // proxy surfaces it unchanged.
+        // The live portal answers an unknown plugin's maven-metadata.xml with a
+        // 303 to Maven Central (repo.maven.apache.org), which fetchUpstreamXml
+        // follows server-side; the genuine 404 only comes back from an
+        // un-throttled IP. The shared CI runner IP is rate-limited by Maven
+        // Central, so that follow yields 429 instead of 404 — making the live
+        // portal a flaky upstream for a 404 assertion. The 303-follow path
+        // itself is covered by gradle-plugins.test.ts unit tests; here we point
+        // a throwaway proxy at a local upstream returning a genuine 404 and
+        // verify the proxy surfaces it unchanged.
         const upstream = http.createServer((_req, res) => {
           res.statusCode = 404;
           res.end('not found');
