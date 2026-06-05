@@ -11,7 +11,9 @@ import { createServer } from '../server.ts';
 
 export const DELAY_DAYS = 7;
 export const CUTOFF = new Date('2024-01-15T00:00:00Z');
-export const NOW = new Date(CUTOFF.getTime() + DELAY_DAYS * 24 * 60 * 60 * 1000);
+export const NOW = new Date(
+  CUTOFF.getTime() + DELAY_DAYS * 24 * 60 * 60 * 1000,
+);
 
 /**
  * The passthrough strategies every integration suite is exercised against, so
@@ -59,7 +61,7 @@ const DEFAULT_UPSTREAMS = {
   rubygems: 'https://rubygems.org',
   go: 'https://proxy.golang.org',
   composer: 'https://packagist.org',
-  maven: 'https://repo.maven.apache.org/maven2',
+  maven: 'https://maven-central.storage-download.googleapis.com/maven2',
   gradlePlugins: 'https://plugins.gradle.org/m2',
 };
 
@@ -132,7 +134,9 @@ export function runCommand(
     let stderr = '';
     proc.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
     proc.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
-    proc.on('close', (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
+    proc.on('close', (code) =>
+      resolve({ exitCode: code ?? 1, stdout, stderr }),
+    );
     proc.on('error', reject);
   });
 }
