@@ -4,8 +4,12 @@
   },
   "repositories": [
     {
+      "name": "tengen",
       "type": "composer",
       "url": "http://localhost:3000/composer"
+    },
+    {
+      "packagist.org": false
     }
   ],
   "config": {

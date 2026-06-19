@@ -25,37 +25,36 @@ npm install foo / pip install bar / gem install baz / ...
 ## Quick start
 
 ```sh
-npm start
+npm start                             # runs `tengen serve`
 ```
 
-On startup `serve` builds a fresh malicious-package database into a temp file (unless `--malicious-db-path` points at an existing one). The proxy then listens on `http://localhost:3000` by default.
+The proxy listens on `http://localhost:3000` by default. On startup `serve` builds a fresh malicious-package database into a temp file (unless `--malicious-db-path` points at an existing one).
 
-## Commands
+## CLI
 
-```sh
-tengen serve                          # Start the registry proxy server
-tengen build-malicious-db -o <path>   # Download and build the malicious-package database
-```
+### `tengen serve`
 
-### `tengen serve` options
+Start the registry proxy server.
 
-| Option                | Default                                | Description                                                                                     |
-| --------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `-h, --host`          | `127.0.0.1`                            | Host address to bind on                                                                         |
-| `-p, --port`          | `3000`                                 | Port to listen on                                                                               |
-| `-d, --delay-days`    | `7`                                    | Exclude versions published within this many days                                                |
-| `--malicious-db-path` | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted  |
-| `--allowlist-db-path` | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)               |
-| `--passthrough-mode`  | `redirect`                             | How downloads are served: `redirect` (307 to upstream) or `pipe` (stream through the proxy)     |
-| `--npm-upstream`      | `https://registry.npmjs.org`           | Upstream URL for npm                                                                            |
-| `--pypi-upstream`     | `https://pypi.org`                     | Upstream URL for PyPI                                                                           |
-| `--rubygems-upstream` | `https://rubygems.org`                 | Upstream URL for RubyGems                                                                       |
-| `--go-upstream`       | `https://proxy.golang.org`             | Upstream URL for Go module proxy                                                                |
-| `--composer-upstream` | `https://packagist.org`                | Upstream URL for Composer (Packagist)                                                           |
-| `--maven-upstream`    | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                  |
-| `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`  | Upstream URL for the Gradle Plugin Portal                                                       |
+| Option                      | Default                                | Description                                                                                    |
+| --------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `-h, --host`                | `127.0.0.1`                            | Host address to bind on                                                                        |
+| `-p, --port`                | `3000`                                 | Port to listen on                                                                              |
+| `-d, --delay-days`          | `7`                                    | Exclude versions published within this many days                                               |
+| `--passthrough-mode`        | `redirect`                             | How downloads are served: `redirect` (307 to upstream) or `pipe` (stream through the proxy)    |
+| `--npm-upstream`            | `https://registry.npmjs.org`           | Upstream URL for npm                                                                           |
+| `--pypi-upstream`           | `https://pypi.org`                     | Upstream URL for PyPI                                                                          |
+| `--rubygems-upstream`       | `https://rubygems.org`                 | Upstream URL for RubyGems                                                                      |
+| `--go-upstream`             | `https://proxy.golang.org`             | Upstream URL for Go module proxy                                                               |
+| `--composer-upstream`       | `https://packagist.org`                | Upstream URL for Composer (Packagist)                                                          |
+| `--maven-upstream`          | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                 |
+| `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`        | Upstream URL for the Gradle Plugin Portal                                                      |
+| `--malicious-db-path`       | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted |
+| `--allowlist-db-path`       | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)              |
 
-### `tengen build-malicious-db` options
+### `tengen build-malicious-db`
+
+Download and build the malicious-package database.
 
 | Option         | Default      | Description                                            |
 | -------------- | ------------ | ------------------------------------------------------ |
@@ -112,7 +111,7 @@ The malicious-package check still applies to allowlisted entries, so a version t
 
 `--passthrough-mode` controls how artifact downloads (and other passthrough requests) reach the upstream:
 
-- `redirect` (default) — respond with a 307 pointing at the upstream URL, so the client downloads directly from the upstream registry. 307 preserves the original HTTP method (e.g. POST for npm audit), unlike 302 which lets clients switch to GET.
+- `redirect` (default) — respond with a 307 pointing at the upstream URL, so the client downloads directly from the upstream registry.
 - `pipe` — stream the upstream response back through the proxy. Use this when clients can only reach the proxy and must not talk to the upstream directly.
 
 ## Package manager configuration
@@ -182,22 +181,12 @@ go env -w GOPROXY=http://localhost:3000/go
 
 ```sh
 composer config repositories.tengen composer http://localhost:3000/composer
+composer config repositories.packagist.org false
 ```
 
 #### maven / gradle
 
 See the [`examples/maven`](examples/maven/) and [`examples/gradle`](examples/gradle/) directories for ready-to-run configuration.
-
-Gradle plugins resolved through `plugins { }` go through the Gradle Plugin Portal rather than Maven Central. Point `pluginManagement` at the `/gradle-plugins` base path so those resolutions are gated too:
-
-```kotlin
-// settings.gradle.kts
-pluginManagement {
-    repositories {
-        maven { url = uri("http://localhost:3000/gradle-plugins") }
-    }
-}
-```
 
 ## Examples
 
@@ -213,18 +202,6 @@ cd examples
 Then point your package manager at `http://localhost:3000`. Each subdirectory has a ready-to-run `install.sh`.
 
 Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`, `pnpm`, `poetry`, `uv`, `yarn-berry`, `yarn-classic`.
-
-## Supported registries
-
-| Registry  | Base path   | Package managers | Upstream default                       |
-| --------- | ----------- | ---------------- | -------------------------------------- |
-| npm       | `/npm`      | npm, yarn, pnpm  | `https://registry.npmjs.org`           |
-| PyPI      | `/pypi`     | pip, poetry, uv  | `https://pypi.org`                     |
-| RubyGems  | `/rubygems` | bundler          | `https://rubygems.org`                 |
-| Go module | `/go`       | go               | `https://proxy.golang.org`             |
-| Composer  | `/composer` | composer         | `https://packagist.org`                |
-| Maven     | `/maven`    | maven, gradle    | `https://repo.maven.apache.org/maven2` |
-| Gradle Plugin Portal | `/gradle-plugins` | gradle (`plugins {}`) | `https://plugins.gradle.org/m2` |
 
 ## Filtered paths per registry
 
