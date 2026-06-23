@@ -1,5 +1,9 @@
 # tengen
 
+<p align="center">
+  <img width="256" alt="tengen" src="https://github.com/user-attachments/assets/8b507bc1-31eb-43ce-b0c3-ae92d10c75ea" />
+</p>
+
 Package registry proxy that filters out new and known-malicious package versions.
 
 New versions are hidden until they have been published for a configurable number of days, and any version listed in the [ossf/malicious-packages](https://github.com/ossf/malicious-packages) database is permanently blocked. This gives your environment time to detect supply chain attacks or regressions before they land.
