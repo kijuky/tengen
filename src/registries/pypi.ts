@@ -49,6 +49,19 @@ export class PypiRegistryProxy extends RegistryProxy {
    *   /pypi/{name}/{version}/json → JSON API metadata (version-specific)
    *   /packages/...               → download route (version-filtered then passthrough)
    */
+  /**
+   * Absolute URL prefix for rewriting artifact links so clients fetch through
+   * the proxy. Returns `{baseUrl}/{name}` in pipe mode when --base-url is set
+   * (the upstream is unreachable, so links must be absolute and point here), or
+   * null otherwise — callers then fall back to a proxy-root-relative path
+   * (Simple API) or leave the upstream URL intact (JSON API).
+   */
+  private pipeArtifactBase(): string | null {
+    return this.config.passthroughMode === 'pipe' && this.config.baseUrl
+      ? `${this.config.baseUrl}/${this.name}`
+      : null;
+  }
+
   public setRouting() {
     this.addMetadataRoute<SimpleApiMetadata, PypiVersionMetadataType>({
       condition: (req) => req.path.startsWith('/simple/'),
@@ -67,7 +80,19 @@ export class PypiRegistryProxy extends RegistryProxy {
       getVersions: (metadata) => getSimpleApiVersions(metadata),
       filterMetadata: filterSimpleApiMetadata,
       respond: (res, filtered, req) => {
-        const rewritten = rewriteFileUrls(filtered, '/' + this.name);
+        // Only rewrite file URLs in pipe mode. In redirect mode the upstream
+        // (files.pythonhosted.org) is reachable, so leave the URLs pointing
+        // there and let the client download directly. In pipe mode use an
+        // absolute --base-url when set, otherwise a proxy-root-relative path
+        // (PEP 503 clients resolve it against the index URL, which already
+        // points at the proxy).
+        const urlPrefix =
+          this.config.passthroughMode === 'pipe'
+            ? (this.pipeArtifactBase() ?? '/' + this.name)
+            : null;
+        const rewritten = urlPrefix
+          ? rewriteFileUrls(filtered, urlPrefix)
+          : filtered;
         if (
           req.headers.accept?.includes('application/vnd.pypi.simple.v1+json')
         ) {
@@ -87,7 +112,17 @@ export class PypiRegistryProxy extends RegistryProxy {
       condition: (req) =>
         req.path.startsWith('/pypi/') && req.path.endsWith('/json'),
       getVersions: getPackageLevelVersions,
-      filterMetadata: filterPackageLevelMetadata,
+      filterMetadata: (metadata, allowedVersions) => {
+        const filtered = filterPackageLevelMetadata(metadata, allowedVersions);
+        // The JSON API embeds absolute file URLs (files.pythonhosted.org). In
+        // pipe mode that host is unreachable, so rewrite them to this proxy.
+        // pip/poetry/uv install via the Simple API; this covers tools that read
+        // download URLs from the JSON API. Requires --base-url because JSON-API
+        // consumers expect absolute URLs; left intact in redirect mode or when
+        // no base URL is set.
+        const base = this.pipeArtifactBase();
+        return base ? rewriteJsonApiFileUrls(filtered, base) : filtered;
+      },
     });
     this.addDownloadRoute<PypiVersionMetadataType>({
       condition: (req) => req.path.startsWith('/packages/'),
@@ -222,6 +257,41 @@ function rewriteFileUrls(
         return f;
       }
     }),
+  };
+}
+
+/**
+ * Rewrite the absolute file URLs in a package-level JSON API response (the
+ * `urls` list and every `releases[version]` entry) to point at this proxy:
+ *
+ *   https://files.pythonhosted.org/packages/.../foo-1.0.whl#sha256=abc
+ *   → {urlPrefix}/packages/.../foo-1.0.whl#sha256=abc
+ *
+ * Unlike the Simple API (which may use relative URLs per PEP 503), JSON API
+ * consumers expect absolute URLs, so `urlPrefix` must be an absolute base.
+ * Leaves any entry whose `url` isn't a parseable absolute URL untouched.
+ */
+function rewriteJsonApiFileUrls(
+  metadata: PyPiMetadata,
+  urlPrefix: string,
+): PyPiMetadata {
+  const rewriteFile = (f: PyPiFile): PyPiFile => {
+    if (typeof f.url !== 'string') return f;
+    try {
+      const u = new URL(f.url);
+      return { ...f, url: urlPrefix + u.pathname + u.hash };
+    } catch {
+      return f;
+    }
+  };
+  const releases: Record<string, PyPiFile[]> = {};
+  for (const [version, files] of Object.entries(metadata.releases)) {
+    releases[version] = files.map(rewriteFile);
+  }
+  return {
+    ...metadata,
+    releases,
+    urls: metadata.urls.map(rewriteFile),
   };
 }
 

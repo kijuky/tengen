@@ -1,10 +1,15 @@
 import axios from 'axios';
 import { RegistryProxy, type VersionMetadata } from './base.ts';
 
+interface NpmVersion {
+  dist?: { tarball?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
 interface NpmPackageMetadata {
   name: string;
   'dist-tags': Record<string, string>;
-  versions: Record<string, unknown>;
+  versions: Record<string, NpmVersion>;
   /** Keys: version strings + "created" + "modified" */
   time: Record<string, string>;
   [key: string]: unknown;
@@ -17,7 +22,22 @@ export class NpmRegistryProxy extends RegistryProxy {
     this.addMetadataRoute<NpmPackageMetadata>({
       condition: (req) => !req.path.includes('/-/'),
       getVersions: getVersionMetadata,
-      filterMetadata,
+      filterMetadata: async (metadata, allowedVersions) => {
+        const filtered = await filterMetadata(metadata, allowedVersions);
+        // In "pipe" mode the upstream is unreachable, so repoint each version's
+        // tarball at this proxy to fetch artifacts through it. The npm CLI
+        // rewrites the host itself, but yarn/pnpm and other clients use
+        // dist.tarball verbatim and would fail against the un-reachable
+        // upstream. Requires --base-url; without it the upstream tarball URL is
+        // left intact. In "redirect" mode the upstream is reachable, so the URL
+        // is left as-is.
+        const tarballBaseUrl =
+          this.config.passthroughMode === 'pipe'
+            ? (this.config.baseUrl ?? null)
+            : null;
+        rewriteTarballUrls(filtered, tarballBaseUrl, this.name);
+        return filtered;
+      },
     });
 
     this.addDownloadRoute({
@@ -112,6 +132,37 @@ async function filterMetadata(
     allowedVersions,
   );
   return metadata;
+}
+
+/**
+ * Rewrite the `dist.tarball` URL of every (already filtered) version to an
+ * absolute URL under this proxy, so downloads are served by the proxy instead
+ * of the upstream:
+ *
+ *   https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz
+ *   → {baseUrl}/npm/lodash/-/lodash-4.17.21.tgz
+ *
+ * The result must be absolute: npm treats a relative `dist.tarball` as a local
+ * file path, so a root-absolute path would not work. No-ops when no base URL is
+ * given (leaving the upstream URL intact — the caller passes null outside pipe
+ * mode), or for any tarball value that isn't a parseable absolute URL.
+ */
+function rewriteTarballUrls(
+  metadata: NpmPackageMetadata,
+  baseUrl: string | null,
+  registryName: string,
+): void {
+  if (!baseUrl) return;
+  for (const version of Object.values(metadata.versions)) {
+    const tarball = version?.dist?.tarball;
+    if (typeof tarball !== 'string') continue;
+    try {
+      const u = new URL(tarball);
+      version.dist!.tarball = `${baseUrl}/${registryName}${u.pathname}${u.search}`;
+    } catch {
+      // Not an absolute URL — leave it untouched.
+    }
+  }
 }
 
 function majorVersion(version: string): string | null {

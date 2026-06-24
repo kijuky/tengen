@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { NpmRegistryProxy } from './npm.ts';
-import { makeHandle, responseBody } from './test-helpers.ts';
+import { makeHandle, makeReq, makeRes, responseBody } from './test-helpers.ts';
 
 vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
@@ -294,6 +294,129 @@ describe('NpmRegistryProxy – metadata filtering', () => {
   it('proxies upstream non-200 status', async () => {
     const res = await handle('/lodash', { error: 'not found' }, 404);
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe('NpmRegistryProxy – tarball URL rewriting', () => {
+  function packument() {
+    return {
+      name: 'lodash',
+      'dist-tags': { latest: '4.17.21' },
+      versions: {
+        '4.17.21': {
+          dist: {
+            tarball: 'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
+            shasum: 'abc',
+          },
+        },
+      },
+      time: {
+        created: '2020-01-01T00:00:00Z',
+        modified: '2021-02-20T00:00:00Z',
+        '4.17.21': '2021-02-20T00:00:00Z', // before cutoff → allowed
+      },
+    };
+  }
+
+  /** Drive a metadata request for the fixture packument through the proxy. */
+  async function fetchPackument(proxy: NpmRegistryProxy) {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: packument(),
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/lodash'), res);
+    return responseBody(res);
+  }
+
+  function tarballOf(result: Record<string, unknown>): string {
+    const versions = result.versions as Record<
+      string,
+      { dist: { tarball: string } }
+    >;
+    return versions['4.17.21'].dist.tarball;
+  }
+
+  it('rewrites dist.tarball to the configured base URL in pipe mode', async () => {
+    const proxy = new NpmRegistryProxy({
+      upstream: 'https://registry.npmjs.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      passthroughMode: 'pipe',
+      baseUrl: 'https://tengen.example.com',
+    });
+    const result = await fetchPackument(proxy);
+    expect(tarballOf(result)).toBe(
+      'https://tengen.example.com/npm/lodash/-/lodash-4.17.21.tgz',
+    );
+  });
+
+  it('leaves dist.tarball untouched in redirect mode (upstream is reachable)', async () => {
+    const proxy = new NpmRegistryProxy({
+      upstream: 'https://registry.npmjs.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      passthroughMode: 'redirect',
+      baseUrl: 'https://tengen.example.com',
+    });
+    const result = await fetchPackument(proxy);
+    expect(tarballOf(result)).toBe(
+      'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
+    );
+  });
+
+  it('leaves dist.tarball untouched in pipe mode when no base URL is configured', async () => {
+    const proxy = new NpmRegistryProxy({
+      upstream: 'https://registry.npmjs.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      passthroughMode: 'pipe',
+    });
+    const result = await fetchPackument(proxy); // no --base-url
+    expect(tarballOf(result)).toBe(
+      'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
+    );
+  });
+
+  it('preserves the path of scoped-package tarballs', async () => {
+    const proxy = new NpmRegistryProxy({
+      upstream: 'https://registry.npmjs.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      passthroughMode: 'pipe',
+      baseUrl: 'https://tengen.example.com',
+    });
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: {
+        name: '@babel/core',
+        'dist-tags': { latest: '7.0.0' },
+        versions: {
+          '7.0.0': {
+            dist: {
+              tarball: 'https://registry.npmjs.org/@babel/core/-/core-7.0.0.tgz',
+            },
+          },
+        },
+        time: {
+          created: '2018-08-27T00:00:00Z',
+          modified: '2018-08-27T00:00:00Z',
+          '7.0.0': '2018-08-27T00:00:00Z',
+        },
+      },
+      headers: {},
+    });
+    const res = makeRes();
+    await proxy.handleRequest(makeReq('/@babel/core'), res);
+    const result = responseBody(res);
+    const versions = result.versions as Record<
+      string,
+      { dist: { tarball: string } }
+    >;
+    expect(versions['7.0.0'].dist.tarball).toBe(
+      'https://tengen.example.com/npm/@babel/core/-/core-7.0.0.tgz',
+    );
   });
 });
 

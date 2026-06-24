@@ -108,11 +108,17 @@ describe('tarball download', () => {
     );
     expect(allowed).toBeDefined();
 
-    // The Simple API rewrites file URLs to proxy-relative paths (/pypi/packages/…);
-    // prepend the proxy origin to make the URL absolute.
-    const proxyOrigin = new URL(ts.url('pypi')).origin;
-    const res = await fetch(proxyOrigin + allowed!.url, { redirect: 'manual' });
-    await expectAllowedDownload(res, mode);
+    if (mode === 'redirect') {
+      // Redirect mode leaves the upstream CDN URL untouched; the client fetches
+      // it directly rather than through the proxy.
+      expect(new URL(allowed!.url).hostname).toBe('files.pythonhosted.org');
+    } else {
+      // Pipe mode rewrites file URLs to proxy-relative paths (/pypi/packages/…);
+      // prepend the proxy origin to make the URL absolute, then stream it through.
+      const proxyOrigin = new URL(ts.url('pypi')).origin;
+      const res = await fetch(proxyOrigin + allowed!.url, { redirect: 'manual' });
+      await expectAllowedDownload(res, mode);
+    }
   }, 30_000);
 
   it('returns 404 for a blocked version', async () => {

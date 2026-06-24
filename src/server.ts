@@ -20,6 +20,7 @@ export function createServer(config: Config): express.Express {
   const maliciousDbPath = config.maliciousDbPath;
   const allowlistDbPath = config.allowlistDbPath;
   const passthroughMode = config.passthroughMode;
+  const baseUrl = config.baseUrl;
   const registries = [
     new NpmRegistryProxy({
       upstream: config.upstreams.npm,
@@ -27,6 +28,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
     new PypiRegistryProxy({
       upstream: config.upstreams.pypi,
@@ -34,6 +36,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
     new RubygemsRegistryProxy({
       upstream: config.upstreams.rubygems,
@@ -41,6 +44,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
     new GoRegistryProxy({
       upstream: config.upstreams.go,
@@ -48,6 +52,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
     new ComposerRegistryProxy({
       upstream: config.upstreams.composer,
@@ -55,6 +60,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
     new MavenRegistryProxy({
       upstream: config.upstreams.maven,
@@ -62,6 +68,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
     new GradlePluginsRegistryProxy({
       upstream: config.upstreams.gradlePlugins,
@@ -69,6 +76,7 @@ export function createServer(config: Config): express.Express {
       maliciousDbPath,
       allowlistDbPath,
       passthroughMode,
+      baseUrl,
     }),
   ];
 
@@ -130,6 +138,9 @@ export async function startServer(
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
     console.log(`  passthrough: ${config.passthroughMode}`);
+    if (config.baseUrl) {
+      console.log(`  base-url:   ${config.baseUrl}`);
+    }
     console.log(`  malicious:  ${config.maliciousDbPath}`);
     if (config.allowlistDbPath) {
       console.log(`  allowlist:  ${config.allowlistDbPath}`);

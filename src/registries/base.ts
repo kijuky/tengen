@@ -22,6 +22,13 @@ interface RegistryConfig {
    * back through the proxy so clients never talk to the upstream directly.
    */
   passthroughMode?: 'redirect' | 'pipe';
+  /**
+   * Absolute base URL of the proxy (e.g. "https://tengen.example.com", no
+   * trailing slash). In `pipe` mode it is used to rewrite upstream artifact URLs
+   * embedded in metadata so clients fetch through the proxy; in `redirect` mode,
+   * or when unset, those URLs are left pointing at the upstream.
+   */
+  baseUrl?: string;
 }
 
 export interface VersionMetadata {

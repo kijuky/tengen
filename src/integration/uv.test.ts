@@ -508,11 +508,20 @@ describe('tarball download', () => {
       f.filename.startsWith('certifi-2023.11.17'),
     );
     expect(allowed).toBeDefined();
-    // The URL is rewritten to a root-relative proxy path (e.g. /pypi/packages/...).
-    // Prepend the proxy origin to make it absolute before fetching.
-    const proxyOrigin = new URL(ts.url('pypi')).origin;
-    const dlRes = await fetch(proxyOrigin + allowed!.url, { method: 'HEAD', redirect: 'manual' });
-    await expectAllowedDownload(dlRes, mode, 'HEAD');
+    if (mode === 'redirect') {
+      // Redirect mode leaves the upstream CDN URL untouched; the client fetches
+      // it directly rather than through the proxy.
+      expect(new URL(allowed!.url).hostname).toBe('files.pythonhosted.org');
+    } else {
+      // Pipe mode rewrites to a root-relative proxy path (e.g. /pypi/packages/...);
+      // prepend the proxy origin to make it absolute, then stream it through.
+      const proxyOrigin = new URL(ts.url('pypi')).origin;
+      const dlRes = await fetch(proxyOrigin + allowed!.url, {
+        method: 'HEAD',
+        redirect: 'manual',
+      });
+      await expectAllowedDownload(dlRes, mode, 'HEAD');
+    }
   }, 30_000);
 
   it('returns 404 for a blocked version tarball', async () => {

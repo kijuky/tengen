@@ -27,6 +27,17 @@ export interface Config {
    * - "pipe": stream the upstream response back through the proxy
    */
   passthroughMode: "redirect" | "pipe";
+  /**
+   * Externally-visible base URL of this proxy (e.g. "https://tengen.example.com").
+   * Used to rewrite upstream artifact URLs embedded in metadata — most notably
+   * npm `dist.tarball` — so clients fetch artifacts through the proxy instead of
+   * talking to the upstream directly. Only applied in `pipe` mode, where the
+   * upstream is unreachable; in `redirect` mode the upstream URL is left as-is.
+   * Must be an absolute http(s) URL: npm treats a relative `dist.tarball` as a
+   * local file path, so a root-absolute path does not work. Required in `pipe`
+   * mode (the loader errors without it); unused in `redirect` mode.
+   */
+  baseUrl?: string;
 }
 
 const OPTIONS = {
@@ -99,6 +110,12 @@ const OPTIONS = {
     description:
       "How to serve passthrough/download requests: 'redirect' (307 to upstream) or 'pipe' (stream the upstream response through the proxy)",
   },
+  "base-url": {
+    type: "string" as const,
+    default: "",
+    description:
+      "Absolute base URL of this proxy (e.g. https://tengen.example.com); used to rewrite artifact URLs like npm dist.tarball so clients fetch through the proxy. Required when using --passthrough-mode pipe",
+  },
   help: {
     type: "boolean" as const,
     description: "Show this help message",
@@ -135,6 +152,37 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     process.exit(1);
   }
 
+  const rawBaseUrl = (values["base-url"] as string).trim();
+  let baseUrl: string | undefined;
+  if (rawBaseUrl) {
+    try {
+      const parsed = new URL(rawBaseUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("must use http or https");
+      }
+      // Normalize: drop any trailing slash so callers can append paths directly.
+      baseUrl = rawBaseUrl.replace(/\/+$/, "");
+    } catch {
+      console.error(
+        `Error: invalid --base-url '${rawBaseUrl}' (expected an absolute http(s) URL like https://tengen.example.com)`,
+      );
+      process.exit(1);
+    }
+  }
+
+  if (passthroughMode === "pipe" && !baseUrl) {
+    // In pipe mode the upstream is unreachable, so artifact URLs (npm
+    // dist.tarball) must be rewritten to point at this proxy — which requires
+    // knowing its externally-visible URL.
+    console.error(
+      "Error: --passthrough-mode 'pipe' requires --base-url (this proxy's " +
+        "externally-visible URL, e.g. https://tengen.example.com) so artifact " +
+        'URLs embedded in metadata (npm dist.tarball, PyPI file URLs) can be ' +
+        'rewritten to point at the proxy instead of the unreachable upstream',
+    );
+    process.exit(1);
+  }
+
   return {
     host: values["host"] as string,
     port: parseInt(values["port"] as string, 10),
@@ -151,5 +199,6 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     maliciousDbPath: values["malicious-db-path"] as string,
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,
     passthroughMode,
+    baseUrl,
   };
 }
