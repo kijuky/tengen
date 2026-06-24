@@ -18,7 +18,7 @@ interface DepsDevVersionResponse {
 }
 
 export class MavenRegistryProxy extends RegistryProxy {
-  readonly name = 'maven';
+  readonly name: string = 'maven';
 
   /**
    * Routes requests:
@@ -64,7 +64,7 @@ export class MavenRegistryProxy extends RegistryProxy {
     };
   }
 
-  private async fetchUpstreamXml(req: Request) {
+  protected async fetchUpstreamXml(req: Request) {
     const base = this.config.upstream.replace(/\/$/, '');
     return axios.get<string>(`${base}${getXmlPath(req.path)}`, {
       responseType: 'text',
@@ -99,13 +99,19 @@ export class MavenRegistryProxy extends RegistryProxy {
     allowedVersions: VersionMetadata[],
   ): string {
     if (!metadata.includes('<versions>')) return metadata;
-    const latest =
-      allowedVersions.reduce<VersionMetadata | null>(
-        (acc, v) => (!acc || v.published > acc.published ? v : acc),
-        null,
-      )?.version ?? '';
+    const latestEntry = allowedVersions.reduce<VersionMetadata | null>(
+      (acc, v) => (!acc || v.published > acc.published ? v : acc),
+      null,
+    );
     const allowed = new Set(allowedVersions.map((v) => v.version));
-    return filterMavenMetadataXml(metadata, allowed, latest) ?? '';
+    return (
+      filterMavenMetadataXml(
+        metadata,
+        allowed,
+        latestEntry?.version ?? '',
+        latestEntry?.published,
+      ) ?? ''
+    );
   }
 
   private respondWithMetadata(
@@ -198,6 +204,7 @@ function filterMavenMetadataXml(
   xml: string,
   allowedVersions: Set<string>,
   latestVersion: string,
+  lastUpdated?: Date,
 ): string | null {
   let hasAllowedVersions = false;
 
@@ -222,7 +229,19 @@ function filterMavenMetadataXml(
   if (!hasAllowedVersions) return null;
 
   // Update <release>, <latest>, and <lastUpdated> to reflect the filtered state
-  return filtered
+  let result = filtered
     .replace(/<release>[^<]*<\/release>/, `<release>${latestVersion}</release>`)
     .replace(/<latest>[^<]*<\/latest>/, `<latest>${latestVersion}</latest>`);
+  if (lastUpdated) {
+    result = result.replace(
+      /<lastUpdated>[^<]*<\/lastUpdated>/,
+      `<lastUpdated>${formatMavenTimestamp(lastUpdated)}</lastUpdated>`,
+    );
+  }
+  return result;
+}
+
+/** Format a Date as Maven's `lastUpdated` timestamp: `yyyyMMddHHmmss` in UTC. */
+function formatMavenTimestamp(date: Date): string {
+  return date.toISOString().replace(/[-:T]/g, '').slice(0, 14);
 }

@@ -1,5 +1,9 @@
 # tengen
 
+<p align="center">
+  <img width="256" alt="tengen" src="https://github.com/user-attachments/assets/8b507bc1-31eb-43ce-b0c3-ae92d10c75ea" />
+</p>
+
 Package registry proxy that filters out new and known-malicious package versions.
 
 New versions are hidden until they have been published for a configurable number of days, and any version listed in the [ossf/malicious-packages](https://github.com/ossf/malicious-packages) database is permanently blocked. This gives your environment time to detect supply chain attacks or regressions before they land.
@@ -53,6 +57,7 @@ tengen build-malicious-db -o <path>   # Download and build the malicious-package
 | `--go-upstream`       | `https://proxy.golang.org`             | Upstream URL for Go module proxy                                                                |
 | `--composer-upstream` | `https://packagist.org`                | Upstream URL for Composer (Packagist)                                                           |
 | `--maven-upstream`    | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                  |
+| `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`  | Upstream URL for the Gradle Plugin Portal                                                       |
 
 ### `tengen build-malicious-db` options
 
@@ -187,6 +192,17 @@ composer config repositories.tengen composer http://localhost:3000/composer
 
 See the [`examples/maven`](examples/maven/) and [`examples/gradle`](examples/gradle/) directories for ready-to-run configuration.
 
+Gradle plugins resolved through `plugins { }` go through the Gradle Plugin Portal rather than Maven Central. Point `pluginManagement` at the `/gradle-plugins` base path so those resolutions are gated too:
+
+```kotlin
+// settings.gradle.kts
+pluginManagement {
+    repositories {
+        maven { url = uri("http://localhost:3000/gradle-plugins") }
+    }
+}
+```
+
 ## Examples
 
 The `examples/` directory contains a working demo that freezes the visible package universe at **2025-01-01** — versions published after that date are hidden.
@@ -212,6 +228,7 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 | Go module | `/go`       | go               | `https://proxy.golang.org`             |
 | Composer  | `/composer` | composer         | `https://packagist.org`                |
 | Maven     | `/maven`    | maven, gradle    | `https://repo.maven.apache.org/maven2` |
+| Gradle Plugin Portal | `/gradle-plugins` | gradle (`plugins {}`) | `https://plugins.gradle.org/m2` |
 
 ## Filtered paths per registry
 
@@ -272,3 +289,7 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 | everything else                                         | Passthrough                                                           |
 
 > **Note:** `maven-metadata.xml` does not include publication timestamps, so version timestamps are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). This external call is made regardless of the `--maven-upstream` setting.
+
+### Gradle Plugin Portal
+
+Served under `/gradle-plugins`. The portal uses the same Maven m2 layout, so the path patterns and gating behaviour are identical to [Maven](#maven) above (including the deps.dev timestamp lookup — plugin marker artifacts are indexed there under the Maven ecosystem). Malicious-package and allowlist entries are read from the shared `maven` ecosystem key, since OSV tracks Gradle plugin artifacts as Maven artifacts.

@@ -13,6 +13,7 @@ export interface Config {
     go: string;
     composer: string;
     maven: string;
+    gradlePlugins: string;
   };
   /** Versions published within this many days are excluded from responses */
   delayDays: number;
@@ -70,6 +71,11 @@ const OPTIONS = {
     type: "string" as const,
     default: "https://repo.maven.apache.org/maven2",
     description: "Upstream URL for Maven Central",
+  },
+  "gradle-plugins-upstream": {
+    type: "string" as const,
+    default: "https://plugins.gradle.org/m2",
+    description: "Upstream URL for the Gradle Plugin Portal",
   },
   "delay-days": {
     type: "string" as const,
@@ -139,6 +145,7 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
       go: values["go-upstream"] as string,
       composer: values["composer-upstream"] as string,
       maven: values["maven-upstream"] as string,
+      gradlePlugins: values["gradle-plugins-upstream"] as string,
     },
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,

@@ -196,7 +196,7 @@ describe("MavenRegistryProxy – metadata filtering", () => {
     expect(body).toContain("<version>1.0.0</version>");
   });
 
-  it("updates <release> and <latest> to the latest allowed version", async () => {
+  it("updates <release>, <latest>, and <lastUpdated> to the latest allowed version", async () => {
     const xml = makeXml(["1.0.0", "1.1.0", "2.0.0"], "2.0.0", "2.0.0");
     const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
       { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
@@ -206,6 +206,9 @@ describe("MavenRegistryProxy – metadata filtering", () => {
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).toContain("<release>1.1.0</release>");
     expect(body).toContain("<latest>1.1.0</latest>");
+    // 1.1.0 published at 2024-01-01T00:00:01Z → Maven yyyyMMddHHmmss (UTC)
+    expect(body).toContain("<lastUpdated>20240101000001</lastUpdated>");
+    expect(body).not.toContain("<lastUpdated>20240201000000</lastUpdated>");
   });
 
   it("returns 404 when all versions are filtered out", async () => {
@@ -247,9 +250,20 @@ describe("MavenRegistryProxy – metadata filtering", () => {
 });
 
 describe("MavenRegistryProxy – checksum endpoints", () => {
+  // The proxy rewrites <lastUpdated> to the latest allowed version's publish
+  // timestamp, so the checksum is computed over that filtered XML, not the raw upstream.
+  function withRolledBackLastUpdated(xml: string): string {
+    return xml.replace(
+      "<lastUpdated>20240201000000</lastUpdated>",
+      "<lastUpdated>20240101000000</lastUpdated>",
+    );
+  }
+
   it("returns SHA1 of the filtered XML for .sha1 path", async () => {
     const xml = makeXml(["1.0.0"]);
-    const expected = createHash("sha1").update(xml).digest("hex");
+    const expected = createHash("sha1")
+      .update(withRolledBackLastUpdated(xml))
+      .digest("hex");
     const res = await handle(
       "/com/example/mylib/maven-metadata.xml.sha1",
       xml,
@@ -262,7 +276,9 @@ describe("MavenRegistryProxy – checksum endpoints", () => {
 
   it("returns MD5 of the filtered XML for .md5 path", async () => {
     const xml = makeXml(["1.0.0"]);
-    const expected = createHash("md5").update(xml).digest("hex");
+    const expected = createHash("md5")
+      .update(withRolledBackLastUpdated(xml))
+      .digest("hex");
     const res = await handle("/com/example/mylib/maven-metadata.xml.md5", xml, [
       { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
     ]);

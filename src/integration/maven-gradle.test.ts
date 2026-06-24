@@ -1,5 +1,9 @@
 /**
- * Integration tests for the Maven registry proxy (used by Gradle).
+ * Integration tests for the Gradle CLI resolving regular dependencies through
+ * the Maven registry proxy (/maven, Maven Central upstream). This exercises
+ * Gradle as a *consumer* of the Maven registry; the Gradle Plugin Portal proxy
+ * (/gradle-plugins) is tested separately in gradle-plugins.test.ts.
+ *
  * API-level tests run unconditionally; gradle CLI tests are skipped if gradle is absent.
  *
  * Package version dates (cutoff = 2024-01-15):

@@ -107,8 +107,17 @@ export function __resetCachesForTesting() {
 }
 
 export abstract class RegistryProxy {
-  /** The human-readable name of this registry (e.g. "npm", "pypi") */
+  /** The human-readable name of this registry (e.g. "npm", "pypi"). Also the URL prefix. */
   abstract readonly name: string;
+  /**
+   * Ecosystem key used to look up entries in the malicious and allowlist DBs.
+   * Defaults to `name`, but a registry whose artifacts are tracked under a
+   * different ecosystem (e.g. Gradle plugins are Maven artifacts in OSV) can
+   * override this to share another registry's DB section.
+   */
+  protected get dbKey(): string {
+    return this.name;
+  }
   protected readonly config: RegistryConfig;
   private readonly routing: CustomRouting[] = [];
   private cachedMaliciousDb:
@@ -322,7 +331,7 @@ export abstract class RegistryProxy {
         const content = readFileSync(dbPath, 'utf-8');
         cachedCombinedDb = JSON.parse(content) as MaliciousDb;
       }
-      const raw = cachedCombinedDb?.[this.name];
+      const raw = cachedCombinedDb?.[this.dbKey];
       if (!raw) {
         this.cachedMaliciousDb = null;
         return null;
@@ -357,7 +366,7 @@ export abstract class RegistryProxy {
         const content = readFileSync(dbPath, 'utf-8');
         cachedCombinedAllowlist = JSON.parse(content) as AllowlistDb;
       }
-      const raw = cachedCombinedAllowlist?.[this.name];
+      const raw = cachedCombinedAllowlist?.[this.dbKey];
       if (!raw) {
         this.cachedAllowlist = null;
         return null;
