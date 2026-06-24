@@ -28,19 +28,30 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
+import {
+  startTestServer,
+  stopTestServer,
+  runCommand,
+  NOW,
+  isAvailable,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
+} from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const uvExists = isAvailable('uv');
 
+describe.each(PASSTHROUGH_MODES)(
+  'PyPI proxy integration tests (uv) (%s mode)',
+  (mode) => {
 describe.skipIf(!uvExists)('uv integration tests', () => {
   let ts: TestServer;
   let server: http.Server;
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 
@@ -427,7 +438,7 @@ describe('simple API metadata', () => {
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 
@@ -471,7 +482,7 @@ describe('tarball download', () => {
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 
@@ -501,7 +512,7 @@ describe('tarball download', () => {
     // Prepend the proxy origin to make it absolute before fetching.
     const proxyOrigin = new URL(ts.url('pypi')).origin;
     const dlRes = await fetch(proxyOrigin + allowed!.url, { method: 'HEAD', redirect: 'manual' });
-    expect(dlRes.status).toBeLessThan(400);
+    await expectAllowedDownload(dlRes, mode, 'HEAD');
   }, 30_000);
 
   it('returns 404 for a blocked version tarball', async () => {
@@ -527,3 +538,5 @@ describe('tarball download', () => {
     expect(res.status).toBe(404);
   }, 30_000);
 });
+  },
+);

@@ -26,19 +26,23 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const mvnExists = isAvailable('mvn');
 
-describe('Maven proxy integration tests', () => {
+describe.each(PASSTHROUGH_MODES)(
+  'Maven proxy integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('maven');
 
@@ -103,20 +107,20 @@ describe('Maven proxy integration tests', () => {
   // ── Artifact download ─────────────────────────────────────────────────────
 
   describe('artifact download', () => {
-    it('returns 302 for an allowed version JAR', async () => {
+    it('serves an allowed version JAR', async () => {
       const res = await fetch(
         `${registryUrl}/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.jar`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
-    it('returns 302 for an allowed version POM', async () => {
+    it('serves an allowed version POM', async () => {
       const res = await fetch(
         `${registryUrl}/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.pom`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version JAR', async () => {
@@ -143,12 +147,12 @@ describe('Maven proxy integration tests', () => {
       expect(res.status).toBe(404);
     }, 30_000);
 
-    it('returns 302 for an allowed version JAR SHA1 checksum', async () => {
+    it('serves an allowed version JAR SHA1 checksum', async () => {
       const res = await fetch(
         `${registryUrl}/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.jar.sha1`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version JAR SHA1 checksum', async () => {
@@ -159,12 +163,12 @@ describe('Maven proxy integration tests', () => {
       expect(res.status).toBe(404);
     }, 30_000);
 
-    it('returns 302 for an allowed version POM MD5 checksum', async () => {
+    it('serves an allowed version POM MD5 checksum', async () => {
       const res = await fetch(
         `${registryUrl}/org/apache/commons/commons-lang3/3.13.0/commons-lang3-3.13.0.pom.md5`,
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(302);
+      await expectAllowedDownload(res, mode);
     }, 30_000);
 
     it('returns 404 for a blocked version POM MD5 checksum', async () => {
@@ -371,4 +375,5 @@ describe('Maven proxy integration tests', () => {
       expect(exitCode).not.toBe(0);
     }, 60_000);
   });
-});
+  },
+);

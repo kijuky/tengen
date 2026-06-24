@@ -28,19 +28,28 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
+import {
+  startTestServer,
+  stopTestServer,
+  runCommand,
+  NOW,
+  isAvailable,
+  PASSTHROUGH_MODES,
+} from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const pnpmExists = isAvailable('pnpm');
 
-describe.skipIf(!pnpmExists)('pnpm integration tests', () => {
+describe.skipIf(!pnpmExists).each(PASSTHROUGH_MODES)(
+  'pnpm integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
@@ -326,6 +335,11 @@ describe.skipIf(!pnpmExists)('pnpm integration tests', () => {
           `--registry=${registryUrl}`,
           '--ignore-scripts',
           '--frozen-lockfile',
+          // The proxy returns 404 for the blocked tarball. pnpm treats that as a
+          // transient failure and retries with exponential backoff (~15s total)
+          // before giving up. The assertion only cares that the install fails,
+          // so disable retries to fail fast instead of waiting out the backoff.
+          '--fetch-retries=0',
           '--store-dir',
           join(tmpDir, '.pnpm-store'),
         ],
@@ -439,4 +453,5 @@ describe.skipIf(!pnpmExists)('pnpm integration tests', () => {
   // so audit requests that the proxy forwards via 307 to registry.npmjs.org always
   // fail on the pnpm side. The proxy's audit passthrough behaviour is covered by
   // the npm audit tests in npm.test.ts.
-});
+  },
+);

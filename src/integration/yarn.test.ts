@@ -36,7 +36,14 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, isAvailable, NOW } from './helpers.ts';
+import {
+  startTestServer,
+  stopTestServer,
+  runCommand,
+  isAvailable,
+  NOW,
+  PASSTHROUGH_MODES,
+} from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
@@ -64,13 +71,15 @@ function resolveYarnPath(dir: string): string {
   return join(dir, match[1].trim());
 }
 
-describe.skipIf(!yarnExists)('yarn integration tests', () => {
+describe.skipIf(!yarnExists).each(PASSTHROUGH_MODES)(
+  'yarn integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
@@ -488,4 +497,5 @@ describe.skipIf(!yarnExists)('yarn integration tests', () => {
       }, 30_000);
     });
   });
-});
+  },
+);

@@ -20,6 +20,12 @@ export interface Config {
   maliciousDbPath: string;
   /** Optional path to a single combined allowlist JSON file */
   allowlistDbPath?: string;
+  /**
+   * How passthrough/download requests are served:
+   * - "redirect": respond with a 307 pointing at the upstream URL
+   * - "pipe": stream the upstream response back through the proxy
+   */
+  passthroughMode: "redirect" | "pipe";
 }
 
 const OPTIONS = {
@@ -81,6 +87,12 @@ const OPTIONS = {
     default: "",
     description: "Path to the allowlist DB JSON file (per-registry exemptions from the age filter)",
   },
+  "passthrough-mode": {
+    type: "string" as const,
+    default: "redirect",
+    description:
+      "How to serve passthrough/download requests: 'redirect' (307 to upstream) or 'pipe' (stream the upstream response through the proxy)",
+  },
   help: {
     type: "boolean" as const,
     description: "Show this help message",
@@ -109,6 +121,14 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     process.exit(0);
   }
 
+  const passthroughMode = values["passthrough-mode"] as string;
+  if (passthroughMode !== "redirect" && passthroughMode !== "pipe") {
+    console.error(
+      `Error: invalid --passthrough-mode '${passthroughMode}' (expected 'redirect' or 'pipe')`,
+    );
+    process.exit(1);
+  }
+
   return {
     host: values["host"] as string,
     port: parseInt(values["port"] as string, 10),
@@ -123,5 +143,6 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,
+    passthroughMode,
   };
 }

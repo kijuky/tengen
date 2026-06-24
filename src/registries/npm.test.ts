@@ -56,7 +56,7 @@ describe('NpmRegistryProxy – routing', () => {
       'dist-tags': { latest: '4.17.21' },
     });
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz',
     );
   });
@@ -81,7 +81,7 @@ describe('NpmRegistryProxy – routing', () => {
   it('passes through search API path without blocking', async () => {
     const res = await handle('/-/v1/search', {});
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://registry.npmjs.org/-/v1/search',
     );
     expect(res.status).not.toHaveBeenCalledWith(404);
@@ -95,7 +95,7 @@ describe('NpmRegistryProxy – routing', () => {
       'dist-tags': { latest: '7.0.0' },
     });
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       'https://registry.npmjs.org/@babel/core/-/core-7.0.0.tgz',
     );
   });

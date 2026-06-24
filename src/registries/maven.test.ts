@@ -87,7 +87,7 @@ describe("MavenRegistryProxy – routing", () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq("/archetype-catalog.xml"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://repo1.maven.org/maven2/archetype-catalog.xml",
     );
   });
@@ -126,7 +126,7 @@ describe("MavenRegistryProxy – download routing", () => {
       res,
     );
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://repo1.maven.org/maven2/com/example/mylib/1.0.0/mylib-1.0.0.jar",
     );
   });

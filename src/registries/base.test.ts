@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { PassThrough, Readable } from "node:stream";
+import { once } from "node:events";
 import type { Request, Response } from "express";
 import {
   RegistryProxy,
@@ -8,7 +10,7 @@ import {
 import { makeHandle, makeReq, makeRes } from "./test-helpers.ts";
 
 vi.mock("axios", () => ({
-  default: { get: vi.fn() },
+  default: { get: vi.fn(), request: vi.fn() },
 }));
 
 vi.mock("node:fs", () => ({
@@ -17,6 +19,7 @@ vi.mock("node:fs", () => ({
 
 import axios from "axios";
 const mockedGet = vi.mocked(axios.get);
+const mockedRequest = vi.mocked(axios.request);
 
 import { readFileSync } from "node:fs";
 const mockReadFileSync = vi.mocked(readFileSync);
@@ -140,12 +143,12 @@ describe("RegistryProxy – metadata routing", () => {
 });
 
 describe("RegistryProxy – passthrough", () => {
-  it("redirects to the upstream URL with 302", async () => {
+  it("redirects to the upstream URL with 307", async () => {
     const res = makeRes();
     await metaProxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz",
     );
     expect(mockedGet).not.toHaveBeenCalled();
@@ -159,8 +162,125 @@ describe("RegistryProxy – passthrough", () => {
     );
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz?foo=bar",
+    );
+  });
+});
+
+// ── Passthrough (pipe mode) ────────────────────────────────────────────────────
+
+/**
+ * A Response backed by a PassThrough so `stream.pipe(res)` actually writes
+ * somewhere, while still exposing the Express helpers the proxy calls.
+ */
+function makePipeRes() {
+  const sink = new PassThrough();
+  const chunks: Buffer[] = [];
+  sink.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  const res = sink as unknown as Response;
+  const sentHeaders: Record<string, string | string[]> = {};
+  const status = vi.fn(() => res);
+  const setHeader = vi.fn((key: string, value: string | string[]) => {
+    sentHeaders[key.toLowerCase()] = value;
+    return res;
+  });
+  const json = vi.fn(() => res);
+  Object.assign(sink, { headersSent: false, status, setHeader, json });
+  return {
+    res,
+    sink,
+    status,
+    setHeader,
+    json,
+    sentHeaders,
+    body: () => Buffer.concat(chunks).toString(),
+  };
+}
+
+class PipeProxy extends RegistryProxy {
+  readonly name = "pipe-test";
+  override setRouting() {
+    this.addMetadataRoute({
+      condition: (req) => req.method === "GET" && !req.path.includes("/tarball/"),
+      getVersions: () => [],
+      filterMetadata: (m) => m,
+    });
+  }
+}
+
+const pipeProxy = new PipeProxy({
+  upstream: "https://upstream.example.com",
+  delayMs: 0,
+  maliciousDbPath: "/dev/null",
+  passthroughMode: "pipe",
+});
+
+describe("RegistryProxy – passthrough (pipe mode)", () => {
+  it("streams the upstream response body and status through to the client", async () => {
+    mockedRequest.mockResolvedValue({
+      status: 200,
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": "5",
+      },
+      data: Readable.from(["hello"]),
+    });
+    const r = makePipeRes();
+    await pipeProxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), r.res);
+    await once(r.sink, "finish");
+
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://upstream.example.com/pkg/tarball/pkg-1.0.0.tgz",
+        method: "GET",
+        responseType: "stream",
+      }),
+    );
+    expect(r.status).toHaveBeenCalledWith(200);
+    expect(r.sentHeaders["content-type"]).toBe("application/octet-stream");
+    expect(r.body()).toBe("hello");
+  });
+
+  it("strips hop-by-hop headers when forwarding the upstream response", async () => {
+    mockedRequest.mockResolvedValue({
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        connection: "keep-alive",
+        "transfer-encoding": "chunked",
+      },
+      data: Readable.from(["{}"]),
+    });
+    const r = makePipeRes();
+    await pipeProxy.handleRequest(makeReq("/pkg/tarball/pkg-1.0.0.tgz"), r.res);
+    await once(r.sink, "finish");
+
+    expect(r.sentHeaders["content-type"]).toBe("application/json");
+    expect(r.sentHeaders["connection"]).toBeUndefined();
+    expect(r.sentHeaders["transfer-encoding"]).toBeUndefined();
+  });
+
+  it("forwards the request method and body for non-GET requests", async () => {
+    mockedRequest.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: Readable.from(["ok"]),
+    });
+    const r = makePipeRes();
+    const req = makeReq(
+      "/-/npm/v1/security/audits/quick",
+      { "content-type": "application/json", "content-length": "2" },
+      "POST",
+    );
+    await pipeProxy.handleRequest(req, r.res);
+    await once(r.sink, "finish");
+
+    const call = mockedRequest.mock.calls[0][0]!;
+    expect(call.method).toBe("POST");
+    expect(call.data).toBe(req);
+    expect((call.headers as Record<string, string>)["content-type"]).toBe(
+      "application/json",
     );
   });
 });
@@ -230,7 +350,7 @@ describe("RegistryProxy – download routing", () => {
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });
@@ -314,7 +434,7 @@ describe("RegistryProxy – download routing", () => {
     const res = makeRes();
     await dlProxy.handleRequest(makeReq("/other/path"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/other/path",
     );
     expect(dlProxy.getVersionMetadataFn).not.toHaveBeenCalled();
@@ -373,7 +493,7 @@ describe("RegistryProxy – routing order", () => {
     const res = makeRes();
     await p.handleRequest(makeReq("/any"), res);
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/any",
     );
     expect(mockedGet).not.toHaveBeenCalled();
@@ -461,7 +581,7 @@ describe("RegistryProxy – allowlist", () => {
     await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });
@@ -490,7 +610,7 @@ describe("RegistryProxy – allowlist", () => {
     await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });
@@ -620,7 +740,7 @@ describe("RegistryProxy – allowlist", () => {
     await proxy.handleRequest(makeReq("/pkg/-/pkg-1.0.0.tgz"), res);
 
     expect(res.redirect).toHaveBeenCalledWith(
-      302,
+      307,
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
   });

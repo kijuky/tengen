@@ -29,19 +29,29 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startTestServer, stopTestServer, runCommand, NOW, isAvailable } from './helpers.ts';
+import {
+  startTestServer,
+  stopTestServer,
+  runCommand,
+  NOW,
+  isAvailable,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
+} from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const npmExists = isAvailable('npm');
 
-describe.skipIf(!npmExists)('npm integration tests', () => {
+describe.skipIf(!npmExists).each(PASSTHROUGH_MODES)(
+  'npm integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
@@ -540,15 +550,16 @@ describe.skipIf(!npmExists)('npm integration tests', () => {
     }, 30_000);
   });
 
-}); // describe.skipIf(!npmExists)
+  },
+); // describe.skipIf(!npmExists).each(PASSTHROUGH_MODES)
 
-describe('npm tarball download', () => {
+describe.each(PASSTHROUGH_MODES)('npm tarball download (%s mode)', (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
@@ -561,11 +572,11 @@ describe('npm tarball download', () => {
     await stopTestServer(server);
   });
 
-  it('returns 302 for an allowed version', async () => {
+  it('serves an allowed version (307 redirect or piped 200)', async () => {
     const res = await fetch(`${registryUrl}/lodash/-/lodash-4.17.21.tgz`, {
       redirect: 'manual',
     });
-    expect(res.status).toBe(302);
+    await expectAllowedDownload(res, mode);
   }, 30_000);
 
   it('returns 404 for a blocked version', async () => {
@@ -575,11 +586,11 @@ describe('npm tarball download', () => {
     expect(res.status).toBe(404);
   }, 30_000);
 
-  it('returns 302 for an allowed scoped package version', async () => {
+  it('serves an allowed scoped package version (307 redirect or piped 200)', async () => {
     const res = await fetch(`${registryUrl}/@babel/core/-/core-7.0.0.tgz`, {
       redirect: 'manual',
     });
-    expect(res.status).toBe(302);
+    await expectAllowedDownload(res, mode);
   }, 30_000);
 
   it('returns 404 for a blocked scoped package version', async () => {

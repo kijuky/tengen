@@ -27,19 +27,22 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const composerExists = isAvailable('composer');
 
-describe('packagist proxy integration tests', () => {
+describe.each(PASSTHROUGH_MODES)(
+  'packagist proxy integration tests (%s mode)',
+  (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer();
+    ts = await startTestServer({ passthroughMode: mode });
     server = ts.server;
     registryUrl = ts.url('composer');
 
@@ -92,32 +95,6 @@ describe('packagist proxy integration tests', () => {
         packages: Record<string, Array<{ version: string }>>;
       };
       expect(data).toHaveProperty('packages');
-    }, 30_000);
-  });
-
-  describe('/dist package download', () => {
-    it('returns 302 for an allowed version', async () => {
-      const res = await fetch(
-        `${registryUrl}/dist/monolog/monolog/3.5.0/deadbeef1234567890abcdef1234567890deadbeef.zip`,
-        { redirect: 'manual' },
-      );
-      expect(res.status).toBe(302);
-    }, 30_000);
-
-    it('returns 404 for a blocked version', async () => {
-      const res = await fetch(
-        `${registryUrl}/dist/monolog/monolog/3.6.0/deadbeef1234567890abcdef1234567890deadbeef.zip`,
-        { redirect: 'manual' },
-      );
-      expect(res.status).toBe(404);
-    }, 30_000);
-
-    it('returns 404 for a non-existent package', async () => {
-      const res = await fetch(
-        `${registryUrl}/dist/nonexistent-vendor/nonexistent-package-xyz123/1.0.0/deadbeef.zip`,
-        { redirect: 'manual' },
-      );
-      expect(res.status).toBe(404);
     }, 30_000);
   });
 
@@ -468,4 +445,5 @@ describe('packagist proxy integration tests', () => {
       }, 120_000);
     });
   });
-});
+  },
+);

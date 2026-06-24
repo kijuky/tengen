@@ -32,19 +32,24 @@ import {
   runCommand,
   isAvailable,
   NOW,
+  PASSTHROUGH_MODES,
+  expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const poetryCmd = isAvailable('poetry') ? 'poetry' : null;
 
+describe.each(PASSTHROUGH_MODES)(
+  'PyPI proxy integration tests (%s mode)',
+  (mode) => {
 let ts: TestServer;
 let server: http.Server;
 let simpleIndexUrl: string;
 let packagesBaseUrl: string;
 
 beforeAll(async () => {
-  ts = await startTestServer();
+  ts = await startTestServer({ passthroughMode: mode });
   server = ts.server;
   simpleIndexUrl = ts.url('pypi') + '/simple/';
   packagesBaseUrl = ts.url('pypi') + '/packages/';
@@ -85,11 +90,29 @@ describe('Simple API filtering (what poetry sees)', () => {
 // Verifies that the download route gates package files on the cutoff date.
 
 describe('tarball download', () => {
-  it('returns 302 for an allowed version', async () => {
-    const res = await fetch(`${packagesBaseUrl}certifi-2023.7.22.tar.gz`, {
-      redirect: 'manual',
+  // PyPI download URLs are hash-addressed (files.pythonhosted.org/packages/<hash>/…),
+  // so mirror what poetry actually does: fetch the proxied Simple API to obtain
+  // the real proxy-relative download path, then request that. This exercises the
+  // gate-pass on the same URL shape clients receive in normal operation, in both
+  // redirect and pipe modes.
+  it('serves an allowed version (gate pass)', async () => {
+    const indexRes = await fetch(`${simpleIndexUrl}certifi/`, {
+      headers: { Accept: 'application/vnd.pypi.simple.v1+json' },
     });
-    expect(res.status).toBe(302);
+    expect(indexRes.status).toBe(200);
+    const data = (await indexRes.json()) as {
+      files: Array<{ filename: string; url: string }>;
+    };
+    const allowed = data.files.find(
+      (f) => f.filename === 'certifi-2023.7.22.tar.gz',
+    );
+    expect(allowed).toBeDefined();
+
+    // The Simple API rewrites file URLs to proxy-relative paths (/pypi/packages/…);
+    // prepend the proxy origin to make the URL absolute.
+    const proxyOrigin = new URL(ts.url('pypi')).origin;
+    const res = await fetch(proxyOrigin + allowed!.url, { redirect: 'manual' });
+    await expectAllowedDownload(res, mode);
   }, 30_000);
 
   it('returns 404 for a blocked version', async () => {
@@ -436,3 +459,5 @@ describe.skipIf(!poetryCmd)('poetry lock', () => {
     expect(exitCode).not.toBe(0);
   }, 30_000);
 });
+  },
+);

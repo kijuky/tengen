@@ -9,13 +9,15 @@ New versions are hidden until they have been published for a configurable number
 tengen sits between your package manager and the upstream registry. On each metadata request it:
 
 1. **Filters by age** — strips versions published within `--delay-days` days so they are invisible to the package manager.
-2. **Blocks malicious versions** — checks the requested package and version against a local copy of the OSSF malicious-packages database and returns 404 for any match.
-3. **Passes through downloads** — artifact downloads (tarballs, JARs, wheels, etc.) for allowed versions are proxied as a 302 redirect to the upstream URL.
+2. **Honours the allowlist** — packages or versions listed in the optional allowlist bypass the age filter, so first-party packages stay available immediately (the malicious-package check still applies).
+3. **Blocks malicious versions** — checks the requested package and version against a local copy of the OSSF malicious-packages database and returns 404 for any match.
+4. **Serves downloads** — artifact downloads (tarballs, JARs, wheels, etc.) for allowed versions are either redirected (307) to the upstream URL or streamed back through the proxy, depending on `--passthrough-mode`.
 
 ```
 npm install foo / pip install bar / gem install baz / ...
   └─> tengen
         ├─> filters new versions (age > --delay-days)
+        ├─> allows allowlisted packages/versions through the age filter
         ├─> blocks known-malicious versions (ossf/malicious-packages)
         └─> upstream registry (npmjs.org / pypi.org / rubygems.org / ...)
 ```
@@ -23,46 +25,94 @@ npm install foo / pip install bar / gem install baz / ...
 ## Quick start
 
 ```sh
-# 1. Build the malicious-package database (one-time, re-run to refresh)
-npm run build:malicious-db
-
-# 2. Start the proxy
 npm start
 ```
 
-The proxy listens on `http://localhost:3000` by default.
+On startup `serve` builds a fresh malicious-package database into a temp file (unless `--malicious-db-path` points at an existing one). The proxy then listens on `http://localhost:3000` by default.
 
 ## Commands
 
 ```sh
-tengen serve              # Start the registry proxy server
-tengen build-malicious-db # Download and build the malicious-package database
+tengen serve                          # Start the registry proxy server
+tengen build-malicious-db -o <path>   # Download and build the malicious-package database
 ```
 
 ### `tengen serve` options
 
-| Option                | Default                                | Description                                      |
-| --------------------- | -------------------------------------- | ------------------------------------------------ |
-| `-h, --host`          | `127.0.0.1`                            | Host address to bind on                          |
-| `-p, --port`          | `3000`                                 | Port to listen on                                |
-| `-d, --delay-days`    | `7`                                    | Exclude versions published within this many days |
-| `--npm-upstream`      | `https://registry.npmjs.org`           | Upstream URL for npm                             |
-| `--pypi-upstream`     | `https://pypi.org`                     | Upstream URL for PyPI                            |
-| `--rubygems-upstream` | `https://rubygems.org`                 | Upstream URL for RubyGems                        |
-| `--go-upstream`       | `https://proxy.golang.org`             | Upstream URL for Go module proxy                 |
-| `--composer-upstream` | `https://packagist.org`                | Upstream URL for Composer (Packagist)            |
-| `--maven-upstream`    | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                   |
+| Option                | Default                                | Description                                                                                     |
+| --------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `-h, --host`          | `127.0.0.1`                            | Host address to bind on                                                                         |
+| `-p, --port`          | `3000`                                 | Port to listen on                                                                               |
+| `-d, --delay-days`    | `7`                                    | Exclude versions published within this many days                                                |
+| `--malicious-db-path` | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted  |
+| `--allowlist-db-path` | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)               |
+| `--passthrough-mode`  | `redirect`                             | How downloads are served: `redirect` (307 to upstream) or `pipe` (stream through the proxy)     |
+| `--npm-upstream`      | `https://registry.npmjs.org`           | Upstream URL for npm                                                                            |
+| `--pypi-upstream`     | `https://pypi.org`                     | Upstream URL for PyPI                                                                           |
+| `--rubygems-upstream` | `https://rubygems.org`                 | Upstream URL for RubyGems                                                                       |
+| `--go-upstream`       | `https://proxy.golang.org`             | Upstream URL for Go module proxy                                                                |
+| `--composer-upstream` | `https://packagist.org`                | Upstream URL for Composer (Packagist)                                                           |
+| `--maven-upstream`    | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                  |
+
+### `tengen build-malicious-db` options
+
+| Option         | Default      | Description                                            |
+| -------------- | ------------ | ------------------------------------------------------ |
+| `-o, --output` | _(required)_ | Output path for the combined malicious-package DB JSON |
 
 ## Malicious-package database
 
-tengen reads from `data/malicious/<ecosystem>.json` files that are built from the [ossf/malicious-packages](https://github.com/ossf/malicious-packages) OSV feed.
+tengen reads from a single combined JSON file built from the [ossf/malicious-packages](https://github.com/ossf/malicious-packages) OSV feed. The file holds every supported ecosystem keyed by registry name:
+
+```jsonc
+{
+  "npm": {
+    "maliciousPackages": ["evil-pkg"],
+    "maliciousVersions": { "left-pad": ["9.9.9"] },
+  },
+  "pypi": { "maliciousPackages": [], "maliciousVersions": {} },
+  "rubygems": { "maliciousPackages": [], "maliciousVersions": {} },
+  "go": { "maliciousPackages": [], "maliciousVersions": {} },
+  "composer": { "maliciousPackages": [], "maliciousVersions": {} },
+  "maven": { "maliciousPackages": [], "maliciousVersions": {} },
+}
+```
+
+- `maliciousPackages` — every version of these packages is blocked.
+- `maliciousVersions` — only the listed versions are blocked.
 
 ```sh
 # Build (requires internet access; set GITHUB_TOKEN for a higher rate limit)
-GITHUB_TOKEN=ghp_xxx npm run build:malicious-db
+GITHUB_TOKEN=ghp_xxx npm run build:malicious-db -- -o data/malicious-db.json
 ```
 
-If the database files are absent, the malicious-package check is skipped and only the age filter applies.
+Then start the proxy with `--malicious-db-path data/malicious-db.json`, or omit the flag and let `serve` build a fresh copy into a temp file on startup. If the file cannot be read or has no entries for a registry, the malicious-package check is skipped for that registry and only the age filter applies.
+
+## Allowlist
+
+An optional allowlist exempts specific packages or versions from the age-delay filter — handy for internal/first-party packages you publish and want available immediately. Point the proxy at a combined JSON file with `--allowlist-db-path`. Same per-registry shape as the malicious DB:
+
+```jsonc
+{
+  "npm": {
+    "allowlistedPackages": ["@myorg/internal-lib"],
+    "allowlistedVersions": { "left-pad": ["1.3.0"] },
+  },
+  "pypi": { "allowlistedPackages": [], "allowlistedVersions": {} },
+}
+```
+
+- `allowlistedPackages` — every version of these packages bypasses the age filter.
+- `allowlistedVersions` — only the listed versions bypass the age filter.
+
+The malicious-package check still applies to allowlisted entries, so a version that is both allowlisted and known-malicious stays blocked.
+
+## Passthrough mode
+
+`--passthrough-mode` controls how artifact downloads (and other passthrough requests) reach the upstream:
+
+- `redirect` (default) — respond with a 307 pointing at the upstream URL, so the client downloads directly from the upstream registry. 307 preserves the original HTTP method (e.g. POST for npm audit), unlike 302 which lets clients switch to GET.
+- `pipe` — stream the upstream response back through the proxy. Use this when clients can only reach the proxy and must not talk to the upstream directly.
 
 ## Package manager configuration
 
@@ -204,13 +254,12 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 
 ### Composer
 
-| Path pattern                                    | Action                                                                |
-| ----------------------------------------------- | --------------------------------------------------------------------- |
-| `/packages.json`                                | Filtered — registry root (URL fields rewritten to proxy)              |
-| `/p2/{vendor}/{package}.json`                   | Filtered — package metadata                                           |
-| `/p2/{vendor}/{package}~dev.json`               | Filtered — dev-channel metadata                                       |
-| `/dist/{vendor}/{package}/{version}/{hash}.zip` | Download — redirect to upstream if allowed; 404 if version is blocked |
-| everything else                                 | Passthrough                                                           |
+| Path pattern                      | Action                                                   |
+| --------------------------------- | -------------------------------------------------------- |
+| `/packages.json`                  | Filtered — registry root (URL fields rewritten to proxy) |
+| `/p2/{vendor}/{package}.json`     | Filtered — package metadata                              |
+| `/p2/{vendor}/{package}~dev.json` | Filtered — dev-channel metadata                          |
+| everything else                   | Passthrough                                              |
 
 ### Maven
 
