@@ -17,15 +17,15 @@ interface RegistryConfig {
    */
   allowlistDbPath?: string;
   /**
-   * How passthrough/download requests are served. "redirect" (default) responds
-   * with a 307 to the upstream URL; "pipe" streams the upstream response
+   * How passthrough/download requests are served. "direct" (default) responds
+   * with a 307 to the upstream URL; "proxied" streams the upstream response
    * back through the proxy so clients never talk to the upstream directly.
    */
-  passthroughMode?: 'redirect' | 'pipe';
+  upstreamAccess?: 'direct' | 'proxied';
   /**
    * Absolute base URL of the proxy (e.g. "https://tengen.example.com", no
-   * trailing slash). In `pipe` mode it is used to rewrite upstream artifact URLs
-   * embedded in metadata so clients fetch through the proxy; in `redirect` mode,
+   * trailing slash). In `proxied` mode it is used to rewrite upstream artifact URLs
+   * embedded in metadata so clients fetch through the proxy; in `direct` mode,
    * or when unset, those URLs are left pointing at the upstream.
    */
   baseUrl?: string;
@@ -269,7 +269,7 @@ export abstract class RegistryProxy {
     req: Request,
     res: Response,
   ): Promise<void> {
-    if (this.config.passthroughMode === 'pipe') {
+    if (this.config.upstreamAccess === 'proxied') {
       await this.pipePassthrough(req, res);
       return;
     }

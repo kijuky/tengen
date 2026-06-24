@@ -32,7 +32,7 @@ import {
   runCommand,
   isAvailable,
   NOW,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
   expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
@@ -40,7 +40,7 @@ import http from 'node:http';
 
 const poetryCmd = isAvailable('poetry') ? 'poetry' : null;
 
-describe.each(PASSTHROUGH_MODES)(
+describe.each(UPSTREAM_ACCESS_MODES)(
   'PyPI proxy integration tests (%s mode)',
   (mode) => {
 let ts: TestServer;
@@ -49,7 +49,7 @@ let simpleIndexUrl: string;
 let packagesBaseUrl: string;
 
 beforeAll(async () => {
-  ts = await startTestServer({ passthroughMode: mode });
+  ts = await startTestServer({ upstreamAccess: mode });
   server = ts.server;
   simpleIndexUrl = ts.url('pypi') + '/simple/';
   packagesBaseUrl = ts.url('pypi') + '/packages/';
@@ -94,7 +94,7 @@ describe('tarball download', () => {
   // so mirror what poetry actually does: fetch the proxied Simple API to obtain
   // the real proxy-relative download path, then request that. This exercises the
   // gate-pass on the same URL shape clients receive in normal operation, in both
-  // redirect and pipe modes.
+  // direct and proxied modes.
   it('serves an allowed version (gate pass)', async () => {
     const indexRes = await fetch(`${simpleIndexUrl}certifi/`, {
       headers: { Accept: 'application/vnd.pypi.simple.v1+json' },
@@ -108,12 +108,12 @@ describe('tarball download', () => {
     );
     expect(allowed).toBeDefined();
 
-    if (mode === 'redirect') {
-      // Redirect mode leaves the upstream CDN URL untouched; the client fetches
+    if (mode === 'direct') {
+      // Direct mode leaves the upstream CDN URL untouched; the client fetches
       // it directly rather than through the proxy.
       expect(new URL(allowed!.url).hostname).toBe('files.pythonhosted.org');
     } else {
-      // Pipe mode rewrites file URLs to proxy-relative paths (/pypi/packages/…);
+      // Proxied mode rewrites file URLs to proxy-relative paths (/pypi/packages/…);
       // prepend the proxy origin to make the URL absolute, then stream it through.
       const proxyOrigin = new URL(ts.url('pypi')).origin;
       const res = await fetch(proxyOrigin + allowed!.url, { redirect: 'manual' });

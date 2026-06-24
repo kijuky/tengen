@@ -16,38 +16,38 @@ export const NOW = new Date(
 );
 
 /**
- * The passthrough strategies every integration suite is exercised against, so
- * that download flows are verified both when the proxy redirects to the
- * upstream and when it pipes the upstream response back through itself.
+ * The upstream-access modes every integration suite is exercised against, so
+ * that download flows are verified both when the client reaches the upstream
+ * directly (307 redirect) and when everything is proxied through tengen.
  */
-export const PASSTHROUGH_MODES = ['redirect', 'pipe'] as const;
-export type PassthroughMode = (typeof PASSTHROUGH_MODES)[number];
+export const UPSTREAM_ACCESS_MODES = ['direct', 'proxied'] as const;
+export type UpstreamAccess = (typeof UPSTREAM_ACCESS_MODES)[number];
 
 /**
- * Expected HTTP status for an *allowed* download given the passthrough mode.
- * Redirect mode answers with a 307 to the upstream; pipe mode streams the
+ * Expected HTTP status for an *allowed* download given the upstream-access mode.
+ * Direct mode answers with a 307 to the upstream; proxied mode streams the
  * upstream response back, so the client sees the upstream's own 200.
  */
-export function allowedDownloadStatus(mode: PassthroughMode): number {
-  return mode === 'pipe' ? 200 : 307;
+export function allowedDownloadStatus(mode: UpstreamAccess): number {
+  return mode === 'proxied' ? 200 : 307;
 }
 
 /**
- * Assert that a download was allowed under the given passthrough mode, then
+ * Assert that a download was allowed under the given upstream-access mode, then
  * release the response body.
  *
- * - redirect: the proxy answers 307 with no body (cancel the empty stream).
- * - pipe: the proxy streams the upstream artifact back as 200; the body must be
+ * - direct: the proxy answers 307 with no body (cancel the empty stream).
+ * - proxied: the proxy streams the upstream artifact back as 200; the body must be
  *   drained so the proxy↔upstream stream completes, and is asserted non-empty
  *   for GET (HEAD has no body).
  */
 export async function expectAllowedDownload(
   res: Response,
-  mode: PassthroughMode,
+  mode: UpstreamAccess,
   method: 'GET' | 'HEAD' = 'GET',
 ): Promise<void> {
   expect(res.status).toBe(allowedDownloadStatus(mode));
-  if (mode === 'pipe' && method === 'GET') {
+  if (mode === 'proxied' && method === 'GET') {
     const buf = await res.arrayBuffer();
     expect(buf.byteLength).toBeGreaterThan(0);
   } else {
@@ -72,8 +72,8 @@ export interface TestServer {
 }
 
 export interface StartTestServerOptions {
-  /** Passthrough/download serving strategy (default: "redirect"). */
-  passthroughMode?: 'redirect' | 'pipe';
+  /** Upstream-access mode (default: "direct"). */
+  upstreamAccess?: 'direct' | 'proxied';
   /** Override individual upstream URLs (e.g. point npm at a fake server). */
   upstreams?: Partial<typeof DEFAULT_UPSTREAMS>;
 }
@@ -87,7 +87,7 @@ export async function startTestServer(
     delayDays: DELAY_DAYS,
     maliciousDbPath: '/dev/null',
     upstreams: { ...DEFAULT_UPSTREAMS, ...opts.upstreams },
-    passthroughMode: opts.passthroughMode ?? 'redirect',
+    upstreamAccess: opts.upstreamAccess ?? 'direct',
   });
 
   const server = app.listen(0, '127.0.0.1') as unknown as http.Server;

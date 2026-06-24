@@ -19,7 +19,7 @@ export function createServer(config: Config): express.Express {
 
   const maliciousDbPath = config.maliciousDbPath;
   const allowlistDbPath = config.allowlistDbPath;
-  const passthroughMode = config.passthroughMode;
+  const upstreamAccess = config.upstreamAccess;
   const baseUrl = config.baseUrl;
   const registries = [
     new NpmRegistryProxy({
@@ -27,7 +27,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
     new PypiRegistryProxy({
@@ -35,7 +35,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
     new RubygemsRegistryProxy({
@@ -43,7 +43,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
     new GoRegistryProxy({
@@ -51,7 +51,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
     new ComposerRegistryProxy({
@@ -59,7 +59,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
     new MavenRegistryProxy({
@@ -67,7 +67,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
     new GradlePluginsRegistryProxy({
@@ -75,7 +75,7 @@ export function createServer(config: Config): express.Express {
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
-      passthroughMode,
+      upstreamAccess,
       baseUrl,
     }),
   ];
@@ -137,7 +137,7 @@ export async function startServer(
       console.log(`  ${name.padEnd(10)}  ${url}`);
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
-    console.log(`  passthrough: ${config.passthroughMode}`);
+    console.log(`  upstream-access: ${config.upstreamAccess}`);
     if (config.baseUrl) {
       console.log(`  base-url:   ${config.baseUrl}`);
     }

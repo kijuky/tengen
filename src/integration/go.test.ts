@@ -34,7 +34,7 @@ import {
   runCommand,
   NOW,
   isAvailable,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
   expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
@@ -42,7 +42,7 @@ import http from 'node:http';
 
 const goExists = isAvailable('go');
 
-describe.each(PASSTHROUGH_MODES)(
+describe.each(UPSTREAM_ACCESS_MODES)(
   'go module proxy integration tests (%s mode)',
   (mode) => {
   let ts: TestServer;
@@ -50,7 +50,7 @@ describe.each(PASSTHROUGH_MODES)(
   let proxyUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     proxyUrl = ts.url('go');
 

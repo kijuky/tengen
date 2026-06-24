@@ -195,15 +195,15 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
-  // A pipe-mode proxy without --base-url falls back to proxy-root-relative paths.
+  // A proxied-mode proxy without --base-url falls back to proxy-root-relative paths.
   const pipeProxyNoBase = new PypiRegistryProxy({
     upstream: 'https://pypi.org',
     delayMs: DELAY_MS,
     maliciousDbPath: '/dev/null',
-    passthroughMode: 'pipe',
+    upstreamAccess: 'proxied',
   });
 
-  it('leaves file URLs untouched in redirect mode', async () => {
+  it('leaves file URLs untouched in direct mode', async () => {
     const data = {
       meta: { 'api-version': '1.0' },
       name: 'requests',
@@ -212,7 +212,7 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     };
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
     const res = makeRes();
-    // The default `proxy` uses redirect mode.
+    // The default `proxy` uses direct mode.
     await proxy.handleRequest(
       makeReq('/simple/requests/', {
         accept: 'application/vnd.pypi.simple.v1+json',
@@ -226,7 +226,7 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     );
   });
 
-  it('rewrites file URLs to proxy-relative paths in pipe mode (no base URL)', async () => {
+  it('rewrites file URLs to proxy-relative paths in proxied mode (no base URL)', async () => {
     const data = {
       meta: { 'api-version': '1.0' },
       name: 'requests',
@@ -244,12 +244,12 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     expect(files[0]['url']).toBe('/pypi/packages/requests-2.28.0.tar.gz');
   });
 
-  it('rewrites file URLs to absolute base-url paths in pipe mode', async () => {
+  it('rewrites file URLs to absolute base-url paths in proxied mode', async () => {
     const pipeProxy = new PypiRegistryProxy({
       upstream: 'https://pypi.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'pipe',
+      upstreamAccess: 'proxied',
       baseUrl: 'https://tengen.example.com',
     });
     const data = {
@@ -273,7 +273,7 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     );
   });
 
-  it('rewrites file URLs to proxy-relative paths in HTML response (pipe mode)', async () => {
+  it('rewrites file URLs to proxy-relative paths in HTML response (proxied mode)', async () => {
     const data = {
       meta: { 'api-version': '1.0' },
       name: 'requests',
@@ -288,7 +288,7 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     expect(html).not.toContain('files.pythonhosted.org');
   });
 
-  it('leaves file URLs untouched in HTML response in redirect mode', async () => {
+  it('leaves file URLs untouched in HTML response in direct mode', async () => {
     const data = {
       meta: { 'api-version': '1.0' },
       name: 'requests',
@@ -468,12 +468,12 @@ describe('PypiRegistryProxy – JSON API file URL rewriting', () => {
     return responseBody(res);
   }
 
-  it('rewrites JSON API file URLs to the base URL in pipe mode', async () => {
+  it('rewrites JSON API file URLs to the base URL in proxied mode', async () => {
     const p = new PypiRegistryProxy({
       upstream: 'https://pypi.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'pipe',
+      upstreamAccess: 'proxied',
       baseUrl: 'https://tengen.example.com',
     });
     const result = await fetchJson(p);
@@ -487,12 +487,12 @@ describe('PypiRegistryProxy – JSON API file URL rewriting', () => {
     );
   });
 
-  it('leaves JSON API file URLs untouched in redirect mode', async () => {
+  it('leaves JSON API file URLs untouched in direct mode', async () => {
     const p = new PypiRegistryProxy({
       upstream: 'https://pypi.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'redirect',
+      upstreamAccess: 'direct',
       baseUrl: 'https://tengen.example.com',
     });
     const result = await fetchJson(p);
@@ -502,12 +502,12 @@ describe('PypiRegistryProxy – JSON API file URL rewriting', () => {
     );
   });
 
-  it('leaves JSON API file URLs untouched in pipe mode without a base URL', async () => {
+  it('leaves JSON API file URLs untouched in proxied mode without a base URL', async () => {
     const p = new PypiRegistryProxy({
       upstream: 'https://pypi.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'pipe',
+      upstreamAccess: 'proxied',
     });
     const result = await fetchJson(p);
     const urls = result['urls'] as Array<{ url: string }>;

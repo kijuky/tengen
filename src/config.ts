@@ -23,19 +23,19 @@ export interface Config {
   allowlistDbPath?: string;
   /**
    * How passthrough/download requests are served:
-   * - "redirect": respond with a 307 pointing at the upstream URL
-   * - "pipe": stream the upstream response back through the proxy
+   * - "direct": respond with a 307 pointing at the upstream URL
+   * - "proxied": stream the upstream response back through the proxy
    */
-  passthroughMode: "redirect" | "pipe";
+  upstreamAccess: "direct" | "proxied";
   /**
    * Externally-visible base URL of this proxy (e.g. "https://tengen.example.com").
    * Used to rewrite upstream artifact URLs embedded in metadata — most notably
    * npm `dist.tarball` — so clients fetch artifacts through the proxy instead of
-   * talking to the upstream directly. Only applied in `pipe` mode, where the
-   * upstream is unreachable; in `redirect` mode the upstream URL is left as-is.
+   * talking to the upstream directly. Only applied in `proxied` mode, where the
+   * upstream is unreachable; in `direct` mode the upstream URL is left as-is.
    * Must be an absolute http(s) URL: npm treats a relative `dist.tarball` as a
-   * local file path, so a root-absolute path does not work. Required in `pipe`
-   * mode (the loader errors without it); unused in `redirect` mode.
+   * local file path, so a root-absolute path does not work. Required in `proxied`
+   * mode (the loader errors without it); unused in `direct` mode.
    */
   baseUrl?: string;
 }
@@ -104,17 +104,17 @@ const OPTIONS = {
     default: "",
     description: "Path to the allowlist DB JSON file (per-registry exemptions from the age filter)",
   },
-  "passthrough-mode": {
+  "upstream-access": {
     type: "string" as const,
-    default: "redirect",
+    default: "direct",
     description:
-      "How to serve passthrough/download requests: 'redirect' (307 to upstream) or 'pipe' (stream the upstream response through the proxy)",
+      "How to serve passthrough/download requests: 'direct' (307 to upstream) or 'proxied' (stream the upstream response through the proxy)",
   },
   "base-url": {
     type: "string" as const,
     default: "",
     description:
-      "Absolute base URL of this proxy (e.g. https://tengen.example.com); used to rewrite artifact URLs like npm dist.tarball so clients fetch through the proxy. Required when using --passthrough-mode pipe",
+      "Absolute base URL of this proxy (e.g. https://tengen.example.com); used to rewrite artifact URLs like npm dist.tarball so clients fetch through the proxy. Required when using --upstream-access proxied",
   },
   help: {
     type: "boolean" as const,
@@ -144,10 +144,10 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     process.exit(0);
   }
 
-  const passthroughMode = values["passthrough-mode"] as string;
-  if (passthroughMode !== "redirect" && passthroughMode !== "pipe") {
+  const upstreamAccess = values["upstream-access"] as string;
+  if (upstreamAccess !== "direct" && upstreamAccess !== "proxied") {
     console.error(
-      `Error: invalid --passthrough-mode '${passthroughMode}' (expected 'redirect' or 'pipe')`,
+      `Error: invalid --upstream-access '${upstreamAccess}' (expected 'direct' or 'proxied')`,
     );
     process.exit(1);
   }
@@ -170,12 +170,12 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     }
   }
 
-  if (passthroughMode === "pipe" && !baseUrl) {
-    // In pipe mode the upstream is unreachable, so artifact URLs (npm
+  if (upstreamAccess === "proxied" && !baseUrl) {
+    // In proxied mode the upstream is unreachable, so artifact URLs (npm
     // dist.tarball) must be rewritten to point at this proxy — which requires
     // knowing its externally-visible URL.
     console.error(
-      "Error: --passthrough-mode 'pipe' requires --base-url (this proxy's " +
+      "Error: --upstream-access 'proxied' requires --base-url (this proxy's " +
         "externally-visible URL, e.g. https://tengen.example.com) so artifact " +
         'URLs embedded in metadata (npm dist.tarball, PyPI file URLs) can be ' +
         'rewritten to point at the proxy instead of the unreachable upstream',
@@ -198,7 +198,7 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,
-    passthroughMode,
+    upstreamAccess,
     baseUrl,
   };
 }

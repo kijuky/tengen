@@ -24,15 +24,15 @@ export class NpmRegistryProxy extends RegistryProxy {
       getVersions: getVersionMetadata,
       filterMetadata: async (metadata, allowedVersions) => {
         const filtered = await filterMetadata(metadata, allowedVersions);
-        // In "pipe" mode the upstream is unreachable, so repoint each version's
+        // In "proxied" mode the upstream is unreachable, so repoint each version's
         // tarball at this proxy to fetch artifacts through it. The npm CLI
         // rewrites the host itself, but yarn/pnpm and other clients use
         // dist.tarball verbatim and would fail against the un-reachable
         // upstream. Requires --base-url; without it the upstream tarball URL is
-        // left intact. In "redirect" mode the upstream is reachable, so the URL
+        // left intact. In "direct" mode the upstream is reachable, so the URL
         // is left as-is.
         const tarballBaseUrl =
-          this.config.passthroughMode === 'pipe'
+          this.config.upstreamAccess === 'proxied'
             ? (this.config.baseUrl ?? null)
             : null;
         rewriteTarballUrls(filtered, tarballBaseUrl, this.name);
@@ -144,8 +144,8 @@ async function filterMetadata(
  *
  * The result must be absolute: npm treats a relative `dist.tarball` as a local
  * file path, so a root-absolute path would not work. No-ops when no base URL is
- * given (leaving the upstream URL intact — the caller passes null outside pipe
- * mode), or for any tarball value that isn't a parseable absolute URL.
+ * given (leaving the upstream URL intact — the caller passes null outside
+ * proxied mode), or for any tarball value that isn't a parseable absolute URL.
  */
 function rewriteTarballUrls(
   metadata: NpmPackageMetadata,

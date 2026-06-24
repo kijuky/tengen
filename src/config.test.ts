@@ -102,41 +102,41 @@ describe("loadConfig", () => {
     expect(config.delayDays).toBe(3);
   });
 
-  it("defaults passthroughMode to redirect", () => {
+  it("defaults upstreamAccess to direct", () => {
     const config = loadConfig([]);
-    expect(config.passthroughMode).toBe("redirect");
+    expect(config.upstreamAccess).toBe("direct");
   });
 
-  it("parses --passthrough-mode pipe (with required --base-url)", () => {
+  it("parses --upstream-access proxied (with required --base-url)", () => {
     const config = loadConfig([
-      "--passthrough-mode",
-      "pipe",
+      "--upstream-access",
+      "proxied",
       "--base-url",
       "https://tengen.example.com",
     ]);
-    expect(config.passthroughMode).toBe("pipe");
+    expect(config.upstreamAccess).toBe("proxied");
   });
 
-  it("exits with an error when --passthrough-mode pipe is missing --base-url", () => {
+  it("exits with an error when --upstream-access proxied is missing --base-url", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit called");
     });
 
-    expect(() => loadConfig(["--passthrough-mode", "pipe"])).toThrow(
+    expect(() => loadConfig(["--upstream-access", "proxied"])).toThrow(
       "process.exit called",
     );
     expect(errSpy).toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it("exits with an error on an invalid --passthrough-mode", () => {
+  it("exits with an error on an invalid --upstream-access", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit called");
     });
 
-    expect(() => loadConfig(["--passthrough-mode", "bogus"])).toThrow(
+    expect(() => loadConfig(["--upstream-access", "bogus"])).toThrow(
       "process.exit called",
     );
     expect(errSpy).toHaveBeenCalled();

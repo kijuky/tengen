@@ -26,7 +26,7 @@ import {
   runCommand,
   isAvailable,
   NOW,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
   expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
@@ -34,7 +34,7 @@ import http from 'node:http';
 
 const mvnExists = isAvailable('mvn');
 
-describe.each(PASSTHROUGH_MODES)(
+describe.each(UPSTREAM_ACCESS_MODES)(
   'Maven proxy integration tests (%s mode)',
   (mode) => {
   let ts: TestServer;
@@ -42,7 +42,7 @@ describe.each(PASSTHROUGH_MODES)(
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     registryUrl = ts.url('maven');
 

@@ -338,12 +338,12 @@ describe('NpmRegistryProxy – tarball URL rewriting', () => {
     return versions['4.17.21'].dist.tarball;
   }
 
-  it('rewrites dist.tarball to the configured base URL in pipe mode', async () => {
+  it('rewrites dist.tarball to the configured base URL in proxied mode', async () => {
     const proxy = new NpmRegistryProxy({
       upstream: 'https://registry.npmjs.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'pipe',
+      upstreamAccess: 'proxied',
       baseUrl: 'https://tengen.example.com',
     });
     const result = await fetchPackument(proxy);
@@ -352,12 +352,12 @@ describe('NpmRegistryProxy – tarball URL rewriting', () => {
     );
   });
 
-  it('leaves dist.tarball untouched in redirect mode (upstream is reachable)', async () => {
+  it('leaves dist.tarball untouched in direct mode (upstream is reachable)', async () => {
     const proxy = new NpmRegistryProxy({
       upstream: 'https://registry.npmjs.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'redirect',
+      upstreamAccess: 'direct',
       baseUrl: 'https://tengen.example.com',
     });
     const result = await fetchPackument(proxy);
@@ -366,12 +366,12 @@ describe('NpmRegistryProxy – tarball URL rewriting', () => {
     );
   });
 
-  it('leaves dist.tarball untouched in pipe mode when no base URL is configured', async () => {
+  it('leaves dist.tarball untouched in proxied mode when no base URL is configured', async () => {
     const proxy = new NpmRegistryProxy({
       upstream: 'https://registry.npmjs.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'pipe',
+      upstreamAccess: 'proxied',
     });
     const result = await fetchPackument(proxy); // no --base-url
     expect(tarballOf(result)).toBe(
@@ -384,7 +384,7 @@ describe('NpmRegistryProxy – tarball URL rewriting', () => {
       upstream: 'https://registry.npmjs.org',
       delayMs: DELAY_MS,
       maliciousDbPath: '/dev/null',
-      passthroughMode: 'pipe',
+      upstreamAccess: 'proxied',
       baseUrl: 'https://tengen.example.com',
     });
     vi.mocked(axios.get).mockResolvedValue({

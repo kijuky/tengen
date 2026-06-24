@@ -34,7 +34,7 @@ import {
   runCommand,
   NOW,
   isAvailable,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
   expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
@@ -42,7 +42,7 @@ import http from 'node:http';
 
 const uvExists = isAvailable('uv');
 
-describe.each(PASSTHROUGH_MODES)(
+describe.each(UPSTREAM_ACCESS_MODES)(
   'PyPI proxy integration tests (uv) (%s mode)',
   (mode) => {
 describe.skipIf(!uvExists)('uv integration tests', () => {
@@ -51,7 +51,7 @@ describe.skipIf(!uvExists)('uv integration tests', () => {
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 
@@ -438,7 +438,7 @@ describe('simple API metadata', () => {
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 
@@ -482,7 +482,7 @@ describe('tarball download', () => {
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 
@@ -508,12 +508,12 @@ describe('tarball download', () => {
       f.filename.startsWith('certifi-2023.11.17'),
     );
     expect(allowed).toBeDefined();
-    if (mode === 'redirect') {
-      // Redirect mode leaves the upstream CDN URL untouched; the client fetches
+    if (mode === 'direct') {
+      // Direct mode leaves the upstream CDN URL untouched; the client fetches
       // it directly rather than through the proxy.
       expect(new URL(allowed!.url).hostname).toBe('files.pythonhosted.org');
     } else {
-      // Pipe mode rewrites to a root-relative proxy path (e.g. /pypi/packages/...);
+      // Proxied mode rewrites to a root-relative proxy path (e.g. /pypi/packages/...);
       // prepend the proxy origin to make it absolute, then stream it through.
       const proxyOrigin = new URL(ts.url('pypi')).origin;
       const dlRes = await fetch(proxyOrigin + allowed!.url, {

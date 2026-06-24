@@ -34,14 +34,14 @@ import {
   runCommand,
   NOW,
   isAvailable,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const pipExists = isAvailable('pip');
 
-describe.skipIf(!pipExists).each(PASSTHROUGH_MODES)(
+describe.skipIf(!pipExists).each(UPSTREAM_ACCESS_MODES)(
   'pip integration tests (%s mode)',
   (mode) => {
   let ts: TestServer;
@@ -49,7 +49,7 @@ describe.skipIf(!pipExists).each(PASSTHROUGH_MODES)(
   let indexUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     indexUrl = ts.url('pypi') + '/simple/';
 

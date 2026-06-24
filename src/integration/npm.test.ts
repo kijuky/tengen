@@ -35,7 +35,7 @@ import {
   runCommand,
   NOW,
   isAvailable,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
   expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
@@ -43,7 +43,7 @@ import http from 'node:http';
 
 const npmExists = isAvailable('npm');
 
-describe.skipIf(!npmExists).each(PASSTHROUGH_MODES)(
+describe.skipIf(!npmExists).each(UPSTREAM_ACCESS_MODES)(
   'npm integration tests (%s mode)',
   (mode) => {
   let ts: TestServer;
@@ -51,7 +51,7 @@ describe.skipIf(!npmExists).each(PASSTHROUGH_MODES)(
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
@@ -551,15 +551,15 @@ describe.skipIf(!npmExists).each(PASSTHROUGH_MODES)(
   });
 
   },
-); // describe.skipIf(!npmExists).each(PASSTHROUGH_MODES)
+); // describe.skipIf(!npmExists).each(UPSTREAM_ACCESS_MODES)
 
-describe.each(PASSTHROUGH_MODES)('npm tarball download (%s mode)', (mode) => {
+describe.each(UPSTREAM_ACCESS_MODES)('npm tarball download (%s mode)', (mode) => {
   let ts: TestServer;
   let server: http.Server;
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
