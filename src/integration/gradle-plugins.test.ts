@@ -20,7 +20,7 @@ import {
   startTestServer,
   stopTestServer,
   NOW,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
   expectAllowedDownload,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
@@ -32,7 +32,7 @@ const MARKER =
 const ALLOWED = '6.23.3';
 const BLOCKED = '6.25.0';
 
-describe.each(PASSTHROUGH_MODES)(
+describe.each(UPSTREAM_ACCESS_MODES)(
   'Gradle Plugin Portal proxy integration tests (%s mode)',
   (mode) => {
     let ts: TestServer;
@@ -40,7 +40,7 @@ describe.each(PASSTHROUGH_MODES)(
     let registryUrl: string;
 
     beforeAll(async () => {
-      ts = await startTestServer({ passthroughMode: mode });
+      ts = await startTestServer({ upstreamAccess: mode });
       server = ts.server;
       registryUrl = ts.url('gradle-plugins');
 
@@ -100,7 +100,7 @@ describe.each(PASSTHROUGH_MODES)(
         );
         const { port } = upstream.address() as AddressInfo;
         const fakeTs = await startTestServer({
-          passthroughMode: mode,
+          upstreamAccess: mode,
           upstreams: { gradlePlugins: `http://127.0.0.1:${port}` },
         });
         try {

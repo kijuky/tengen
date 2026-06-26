@@ -168,7 +168,7 @@ describe("RegistryProxy – passthrough", () => {
   });
 });
 
-// ── Passthrough (pipe mode) ────────────────────────────────────────────────────
+// ── Passthrough (proxied mode) ────────────────────────────────────────────────────
 
 /**
  * A Response backed by a PassThrough so `stream.pipe(res)` actually writes
@@ -213,10 +213,10 @@ const pipeProxy = new PipeProxy({
   upstream: "https://upstream.example.com",
   delayMs: 0,
   maliciousDbPath: "/dev/null",
-  passthroughMode: "pipe",
+  upstreamAccess: "proxied",
 });
 
-describe("RegistryProxy – passthrough (pipe mode)", () => {
+describe("RegistryProxy – passthrough (proxied mode)", () => {
   it("streams the upstream response body and status through to the client", async () => {
     mockedRequest.mockResolvedValue({
       status: 200,

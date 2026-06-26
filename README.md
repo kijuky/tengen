@@ -15,7 +15,7 @@ tengen sits between your package manager and the upstream registry. On each meta
 1. **Filters by age** — strips versions published within `--delay-days` days so they are invisible to the package manager.
 2. **Honours the allowlist** — packages or versions listed in the optional allowlist bypass the age filter, so first-party packages stay available immediately (the malicious-package check still applies).
 3. **Blocks malicious versions** — checks the requested package and version against a local copy of the OSSF malicious-packages database and returns 404 for any match.
-4. **Serves downloads** — artifact downloads (tarballs, JARs, wheels, etc.) for allowed versions are either redirected (307) to the upstream URL or streamed back through the proxy, depending on `--passthrough-mode`.
+4. **Serves downloads** — artifact downloads (tarballs, JARs, wheels, etc.) for allowed versions are either redirected (307) to the upstream URL or streamed back through the proxy, depending on `--upstream-access`.
 
 ```
 npm install foo / pip install bar / gem install baz / ...
@@ -45,7 +45,8 @@ Start the registry proxy server.
 | `-h, --host`                | `127.0.0.1`                            | Host address to bind on                                                                        |
 | `-p, --port`                | `3000`                                 | Port to listen on                                                                              |
 | `-d, --delay-days`          | `7`                                    | Exclude versions published within this many days                                               |
-| `--passthrough-mode`        | `redirect`                             | How downloads are served: `redirect` (307 to upstream) or `pipe` (stream through the proxy)    |
+| `--upstream-access`        | `direct`                             | How downloads are served: `direct` (307 to upstream) or `proxied` (stream through the proxy)    |
+| `--base-url`                | _(none)_                               | Absolute base URL (e.g. `https://tengen.example.com`); used to rewrite npm `dist.tarball` so clients fetch through the proxy. Required when using `proxied` mode |
 | `--npm-upstream`            | `https://registry.npmjs.org`           | Upstream URL for npm                                                                           |
 | `--pypi-upstream`           | `https://pypi.org`                     | Upstream URL for PyPI                                                                          |
 | `--rubygems-upstream`       | `https://rubygems.org`                 | Upstream URL for RubyGems                                                                      |
@@ -111,12 +112,24 @@ An optional allowlist exempts specific packages or versions from the age-delay f
 
 The malicious-package check still applies to allowlisted entries, so a version that is both allowlisted and known-malicious stays blocked.
 
-## Passthrough mode
+## Upstream access
 
-`--passthrough-mode` controls how artifact downloads (and other passthrough requests) reach the upstream:
+`--upstream-access` controls how artifact downloads (and other passthrough requests) reach the upstream:
 
-- `redirect` (default) — respond with a 307 pointing at the upstream URL, so the client downloads directly from the upstream registry.
-- `pipe` — stream the upstream response back through the proxy. Use this when clients can only reach the proxy and must not talk to the upstream directly.
+- `direct` (default) — respond with a 307 pointing at the upstream URL, so the client downloads directly from the upstream registry.
+- `proxied` — stream the upstream response back through the proxy. Use this when clients can only reach the proxy and must not talk to the upstream directly.
+
+### Artifact URL rewriting and `--base-url`
+
+Package metadata often embeds absolute artifact URLs that point at the upstream registry — npm's `dist.tarball` (e.g. `https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz`) and PyPI's Simple/JSON API file URLs (`https://files.pythonhosted.org/packages/...`). In `proxied` mode the upstream is unreachable, so the proxy rewrites these to absolute URLs that point at itself (`<base-url>/npm/...`, `<base-url>/pypi/...`) so clients fetch artifacts through the proxy rather than the unreachable upstream — the npm CLI rewrites the tarball host itself, but yarn, pnpm, and JSON-API consumers use the embedded URLs verbatim.
+
+In `direct` mode the upstream is reachable, so all of these URLs (npm's `dist.tarball`, the PyPI Simple and JSON API file URLs) are left pointing at it and the client downloads directly from the upstream. Blocked versions are already removed from the filtered metadata, so only allowed artifacts are ever referenced.
+
+The proxy needs to know its own externally-visible URL to build these links, so `--base-url` is **required** in `proxied` mode — startup fails with an error if it is missing. It must be an absolute URL — npm treats a relative `dist.tarball` as a local file path, so a root-relative path does not work:
+
+```sh
+tengen serve --upstream-access proxied --base-url https://tengen.example.com
+```
 
 ## Package manager configuration
 

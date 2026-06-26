@@ -195,7 +195,15 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
-  it('rewrites file URLs to proxy-relative paths in JSON response', async () => {
+  // A proxied-mode proxy without --base-url falls back to proxy-root-relative paths.
+  const pipeProxyNoBase = new PypiRegistryProxy({
+    upstream: 'https://pypi.org',
+    delayMs: DELAY_MS,
+    maliciousDbPath: '/dev/null',
+    upstreamAccess: 'proxied',
+  });
+
+  it('leaves file URLs untouched in direct mode', async () => {
     const data = {
       meta: { 'api-version': '1.0' },
       name: 'requests',
@@ -204,7 +212,30 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     };
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
     const res = makeRes();
+    // The default `proxy` uses direct mode.
     await proxy.handleRequest(
+      makeReq('/simple/requests/', {
+        accept: 'application/vnd.pypi.simple.v1+json',
+      }),
+      res,
+    );
+    const result = responseBody(res);
+    const files = result['files'] as Record<string, unknown>[];
+    expect(files[0]['url']).toBe(
+      'https://files.pythonhosted.org/packages/requests-2.28.0.tar.gz',
+    );
+  });
+
+  it('rewrites file URLs to proxy-relative paths in proxied mode (no base URL)', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await pipeProxyNoBase.handleRequest(
       makeReq('/simple/requests/', { accept: 'application/vnd.pypi.simple.v1+json' }),
       res,
     );
@@ -213,7 +244,51 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     expect(files[0]['url']).toBe('/pypi/packages/requests-2.28.0.tar.gz');
   });
 
-  it('rewrites file URLs to proxy-relative paths in HTML response', async () => {
+  it('rewrites file URLs to absolute base-url paths in proxied mode', async () => {
+    const pipeProxy = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      upstreamAccess: 'proxied',
+      baseUrl: 'https://tengen.example.com',
+    });
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await pipeProxy.handleRequest(
+      makeReq('/simple/requests/', {
+        accept: 'application/vnd.pypi.simple.v1+json',
+      }),
+      res,
+    );
+    const result = responseBody(res);
+    const files = result['files'] as Record<string, unknown>[];
+    expect(files[0]['url']).toBe(
+      'https://tengen.example.com/pypi/packages/requests-2.28.0.tar.gz',
+    );
+  });
+
+  it('rewrites file URLs to proxy-relative paths in HTML response (proxied mode)', async () => {
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await pipeProxyNoBase.handleRequest(makeReq('/simple/requests/'), res);
+    const html = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(html).toContain('href="/pypi/packages/requests-2.28.0.tar.gz"');
+    expect(html).not.toContain('files.pythonhosted.org');
+  });
+
+  it('leaves file URLs untouched in HTML response in direct mode', async () => {
     const data = {
       meta: { 'api-version': '1.0' },
       name: 'requests',
@@ -224,8 +299,9 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     const res = makeRes();
     await proxy.handleRequest(makeReq('/simple/requests/'), res);
     const html = vi.mocked(res.send).mock.calls[0][0] as string;
-    expect(html).toContain('href="/pypi/packages/requests-2.28.0.tar.gz"');
-    expect(html).not.toContain('files.pythonhosted.org');
+    expect(html).toContain(
+      'href="https://files.pythonhosted.org/packages/requests-2.28.0.tar.gz"',
+    );
   });
 });
 
@@ -358,6 +434,86 @@ describe('PypiRegistryProxy – JSON API package-level (/pypi/{name}/json)', () 
       404,
     );
     expect(res.status).toHaveBeenCalledWith(404);
+  });
+});
+
+describe('PypiRegistryProxy – JSON API file URL rewriting', () => {
+  function fileWithUrl(uploadTime: string, filename: string) {
+    return {
+      upload_time_iso_8601: uploadTime,
+      filename,
+      url: `https://files.pythonhosted.org/packages/ab/cd/${filename}`,
+    };
+  }
+
+  function jsonData() {
+    return {
+      info: { name: 'requests', version: '2.28.0' },
+      last_serial: 1,
+      releases: {
+        '2.28.0': [fileWithUrl('2024-01-01T00:00:00Z', 'requests-2.28.0.tar.gz')],
+      },
+      urls: [fileWithUrl('2024-01-01T00:00:00Z', 'requests-2.28.0.tar.gz')],
+    };
+  }
+
+  async function fetchJson(p: PypiRegistryProxy) {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: jsonData(),
+      headers: {},
+    });
+    const res = makeRes();
+    await p.handleRequest(makeReq('/pypi/requests/json'), res);
+    return responseBody(res);
+  }
+
+  it('rewrites JSON API file URLs to the base URL in proxied mode', async () => {
+    const p = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      upstreamAccess: 'proxied',
+      baseUrl: 'https://tengen.example.com',
+    });
+    const result = await fetchJson(p);
+    const urls = result['urls'] as Array<{ url: string }>;
+    const releases = result['releases'] as Record<string, Array<{ url: string }>>;
+    expect(urls[0].url).toBe(
+      'https://tengen.example.com/pypi/packages/ab/cd/requests-2.28.0.tar.gz',
+    );
+    expect(releases['2.28.0'][0].url).toBe(
+      'https://tengen.example.com/pypi/packages/ab/cd/requests-2.28.0.tar.gz',
+    );
+  });
+
+  it('leaves JSON API file URLs untouched in direct mode', async () => {
+    const p = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      upstreamAccess: 'direct',
+      baseUrl: 'https://tengen.example.com',
+    });
+    const result = await fetchJson(p);
+    const urls = result['urls'] as Array<{ url: string }>;
+    expect(urls[0].url).toBe(
+      'https://files.pythonhosted.org/packages/ab/cd/requests-2.28.0.tar.gz',
+    );
+  });
+
+  it('leaves JSON API file URLs untouched in proxied mode without a base URL', async () => {
+    const p = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      upstreamAccess: 'proxied',
+    });
+    const result = await fetchJson(p);
+    const urls = result['urls'] as Array<{ url: string }>;
+    expect(urls[0].url).toBe(
+      'https://files.pythonhosted.org/packages/ab/cd/requests-2.28.0.tar.gz',
+    );
   });
 });
 

@@ -34,14 +34,14 @@ import {
   runCommand,
   NOW,
   isAvailable,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
 
 const pnpmExists = isAvailable('pnpm');
 
-describe.skipIf(!pnpmExists).each(PASSTHROUGH_MODES)(
+describe.skipIf(!pnpmExists).each(UPSTREAM_ACCESS_MODES)(
   'pnpm integration tests (%s mode)',
   (mode) => {
   let ts: TestServer;
@@ -49,7 +49,7 @@ describe.skipIf(!pnpmExists).each(PASSTHROUGH_MODES)(
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 

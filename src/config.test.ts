@@ -102,23 +102,82 @@ describe("loadConfig", () => {
     expect(config.delayDays).toBe(3);
   });
 
-  it("defaults passthroughMode to redirect", () => {
+  it("defaults upstreamAccess to direct", () => {
     const config = loadConfig([]);
-    expect(config.passthroughMode).toBe("redirect");
+    expect(config.upstreamAccess).toBe("direct");
   });
 
-  it("parses --passthrough-mode pipe", () => {
-    const config = loadConfig(["--passthrough-mode", "pipe"]);
-    expect(config.passthroughMode).toBe("pipe");
+  it("parses --upstream-access proxied (with required --base-url)", () => {
+    const config = loadConfig([
+      "--upstream-access",
+      "proxied",
+      "--base-url",
+      "https://tengen.example.com",
+    ]);
+    expect(config.upstreamAccess).toBe("proxied");
   });
 
-  it("exits with an error on an invalid --passthrough-mode", () => {
+  it("exits with an error when --upstream-access proxied is missing --base-url", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit called");
     });
 
-    expect(() => loadConfig(["--passthrough-mode", "bogus"])).toThrow(
+    expect(() => loadConfig(["--upstream-access", "proxied"])).toThrow(
+      "process.exit called",
+    );
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("exits with an error on an invalid --upstream-access", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() => loadConfig(["--upstream-access", "bogus"])).toThrow(
+      "process.exit called",
+    );
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("leaves baseUrl undefined by default", () => {
+    const config = loadConfig([]);
+    expect(config.baseUrl).toBeUndefined();
+  });
+
+  it("parses --base-url", () => {
+    const config = loadConfig(["--base-url", "https://tengen.example.com"]);
+    expect(config.baseUrl).toBe("https://tengen.example.com");
+  });
+
+  it("strips a trailing slash from --base-url", () => {
+    const config = loadConfig(["--base-url", "https://tengen.example.com/"]);
+    expect(config.baseUrl).toBe("https://tengen.example.com");
+  });
+
+  it("exits with an error on a non-http(s) --base-url", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() => loadConfig(["--base-url", "ftp://nope.example.com"])).toThrow(
+      "process.exit called",
+    );
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("exits with an error on a malformed --base-url", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() => loadConfig(["--base-url", "not a url"])).toThrow(
       "process.exit called",
     );
     expect(errSpy).toHaveBeenCalled();

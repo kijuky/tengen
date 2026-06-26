@@ -45,7 +45,7 @@ import {
   runCommand,
   isAvailable,
   NOW,
-  PASSTHROUGH_MODES,
+  UPSTREAM_ACCESS_MODES,
 } from './helpers.ts';
 import type { TestServer } from './helpers.ts';
 import http from 'node:http';
@@ -74,7 +74,7 @@ function resolveYarnPath(dir: string): string {
   return join(dir, match[1].trim());
 }
 
-describe.skipIf(!yarnExists).each(PASSTHROUGH_MODES)(
+describe.skipIf(!yarnExists).each(UPSTREAM_ACCESS_MODES)(
   'yarn integration tests (%s mode)',
   (mode) => {
   let ts: TestServer;
@@ -82,7 +82,7 @@ describe.skipIf(!yarnExists).each(PASSTHROUGH_MODES)(
   let registryUrl: string;
 
   beforeAll(async () => {
-    ts = await startTestServer({ passthroughMode: mode });
+    ts = await startTestServer({ upstreamAccess: mode });
     server = ts.server;
     registryUrl = ts.url('npm');
 
