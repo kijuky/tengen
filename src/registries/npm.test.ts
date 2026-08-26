@@ -275,6 +275,49 @@ describe('NpmRegistryProxy – metadata filtering', () => {
     expect((result['dist-tags'] as Record<string, string>).latest).toBe('2.0.0');
   });
 
+  it.each(['2.1.0-canary-abc', '2.1.0-beta.1', '2.1.0-rc.1', '2.1.0-alpha.0'])(
+    'skips prerelease version %s when redirecting a filtered latest tag',
+    async (prerelease) => {
+      const data = {
+        name: 'pkg',
+        'dist-tags': { latest: '2.1.0' }, // filtered
+        versions: { [prerelease]: {}, '2.0.0': {} },
+        time: {
+          created: '2023-01-01T00:00:00Z',
+          modified: '2024-02-01T00:00:00Z',
+          '2.0.0': '2024-01-05T00:00:00Z', // allowed
+          [prerelease]: '2024-01-10T00:00:00Z', // allowed, newer, but prerelease
+          '2.1.0': '2024-02-01T00:00:00Z', // filtered
+        },
+      };
+      const res = await handle('/lodash', data);
+      const result = responseBody(res);
+      // The prerelease is newer, but must never be chosen as latest.
+      expect((result['dist-tags'] as Record<string, string>).latest).toBe(
+        '2.0.0',
+      );
+    },
+  );
+
+  it('falls back to a prerelease version for latest when nothing else is allowed', async () => {
+    const data = {
+      name: 'pkg',
+      'dist-tags': { latest: '2.1.0' }, // filtered
+      versions: { '2.1.0-canary-abc': {} },
+      time: {
+        created: '2023-01-01T00:00:00Z',
+        modified: '2024-02-01T00:00:00Z',
+        '2.1.0-canary-abc': '2024-01-10T00:00:00Z', // allowed, prerelease
+        '2.1.0': '2024-02-01T00:00:00Z', // filtered
+      },
+    };
+    const res = await handle('/lodash', data);
+    const result = responseBody(res);
+    expect((result['dist-tags'] as Record<string, string>).latest).toBe(
+      '2.1.0-canary-abc',
+    );
+  });
+
   it('drops the latest dist-tag when all versions are filtered', async () => {
     const data = {
       name: 'pkg',

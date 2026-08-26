@@ -170,6 +170,15 @@ function majorVersion(version: string): string | null {
   return major !== undefined && major !== '' ? major : null;
 }
 
+/**
+ * Whether a version string carries a semver prerelease identifier, e.g.
+ * "2.0.0-beta.1", "2.0.0-rc.2", or "19.2.0-canary-3f52beea-20250314".
+ * Build metadata (the "+..." suffix) is ignored since it isn't a prerelease marker.
+ */
+function isPrereleaseVersion(version: string): boolean {
+  return version.split('+')[0]!.includes('-');
+}
+
 function filterDistTags(
   distTags: Record<string, string>,
   allowedVersions: VersionMetadata[],
@@ -177,21 +186,29 @@ function filterDistTags(
   const sortedByDate = [...allowedVersions].sort(
     (a, b) => b.published.getTime() - a.published.getTime(),
   );
+  // Candidates for re-pointing "latest": prefer stable (non-prerelease)
+  // versions so a beta/rc/canary release never becomes the resolved latest;
+  // fall back to the full (prerelease-inclusive) list only if nothing else
+  // is allowed.
+  const stableByDate = sortedByDate.filter((v) => !isPrereleaseVersion(v.version));
 
   const allowedVersionsSet = new Set(allowedVersions.map((v) => v.version));
   const result: Record<string, string> = {};
   for (const [tag, version] of Object.entries(distTags)) {
     if (allowedVersionsSet.has(version)) {
       result[tag] = version;
-    } else if (tag === 'latest' && sortedByDate.length > 0) {
+    } else if (tag === 'latest') {
+      const candidates =
+        stableByDate.length > 0 ? stableByDate : sortedByDate;
+      if (candidates.length === 0) continue;
       // Prefer the newest allowed version within the same major version as the
       // original latest; fall back to the newest overall if none match.
       const originalMajor = majorVersion(version);
       const sameMajor =
         originalMajor !== null
-          ? sortedByDate.find((v) => majorVersion(v.version) === originalMajor)
+          ? candidates.find((v) => majorVersion(v.version) === originalMajor)
           : undefined;
-      result[tag] = (sameMajor ?? sortedByDate[0]).version;
+      result[tag] = (sameMajor ?? candidates[0]).version;
     }
   }
   return result;
