@@ -30,6 +30,7 @@ export class MavenRegistryProxy extends RegistryProxy {
    * Routes requests:
    *   /{groupId/as/path}/{artifactId}/maven-metadata.xml         → filtered XML metadata
    *   /{...}/maven-metadata.xml.{sha1,md5,sha256,sha512}         → checksum of filtered XML
+   *   /{...}/{version}/maven-metadata.xml                        → filtered snapshot metadata
    *   /{groupId/as/path}/{artifactId}/{version}/{file}          → download check (403 if version blocked)
    *   everything else                                           → passthrough
    */
@@ -127,6 +128,12 @@ export class MavenRegistryProxy extends RegistryProxy {
     metadata: string,
     req: Request,
   ): Promise<VersionMetadata[]> {
+    // A version-level maven-metadata.xml describes one timestamped SNAPSHOT
+    // build and carries its own timestamp, so it needs no external lookup.
+    if (metadata.includes('<snapshotVersions>')) {
+      return snapshotVersions(metadata, getXmlPath(req.path));
+    }
+
     // Group-level metadata lists plugins/artifacts without <versions> — skip search
     if (!metadata.includes('<versions>')) return [];
 
@@ -148,6 +155,13 @@ export class MavenRegistryProxy extends RegistryProxy {
     metadata: string,
     allowedVersions: VersionMetadata[],
   ): string {
+    // A snapshot's metadata describes a single build (one entry per extension
+    // and classifier), so it is served whole or not at all. An empty
+    // allowedVersions means that build is inside the cooldown window.
+    if (metadata.includes('<snapshotVersions>')) {
+      return allowedVersions.length > 0 ? metadata : '';
+    }
+
     if (!metadata.includes('<versions>')) return metadata;
     const latestEntry = allowedVersions.reduce<VersionMetadata | null>(
       (acc, v) => (!acc || v.published > acc.published ? v : acc),
@@ -241,6 +255,66 @@ function parseMavenDownloadPath(path: string): {
   const artifactId = parts[parts.length - 3];
   const groupId = parts.slice(0, -3).join('.');
   return { groupId, artifactId, version };
+}
+
+/**
+ * Read the build timestamp out of a version-level (snapshot) maven-metadata.xml.
+ *
+ * The document describes one timestamped build — `<snapshotVersions>` lists it
+ * once per extension and classifier — so a single VersionMetadata represents
+ * the whole file. `<lastUpdated>` (yyyyMMddHHmmss, UTC) is the build's time;
+ * `<snapshot><timestamp>` (yyyyMMdd.HHmmss) is the same instant and is used as
+ * a fallback.
+ *
+ * Returns an empty list when no timestamp can be read, which blocks the
+ * metadata rather than serving a build of unknown age.
+ */
+function snapshotVersions(xml: string, path: string): VersionMetadata[] {
+  const { groupId, artifactId } = parseSnapshotPath(path);
+  const version = /<version>([^<]+)<\/version>/.exec(xml)?.[1]?.trim() ?? '';
+  const published = parseSnapshotTimestamp(xml);
+  if (!published) return [];
+  return [{ packageName: `${groupId}:${artifactId}`, version, published }];
+}
+
+/** Parse `<lastUpdated>`, falling back to `<snapshot><timestamp>`. */
+function parseSnapshotTimestamp(xml: string): Date | null {
+  const lastUpdated = /<lastUpdated>(\d{14})<\/lastUpdated>/.exec(xml)?.[1];
+  if (lastUpdated) return parseCompactUtc(lastUpdated);
+  const stamp = /<timestamp>(\d{8})\.(\d{6})<\/timestamp>/.exec(xml);
+  if (stamp) return parseCompactUtc(`${stamp[1]}${stamp[2]}`);
+  return null;
+}
+
+/** Parse a `yyyyMMddHHmmss` string as UTC. */
+function parseCompactUtc(v: string): Date | null {
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(v);
+  if (!m) return null;
+  const d = new Date(
+    Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!),
+  );
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Parse groupId and artifactId from a version-level metadata path.
+ *
+ * `/org/apache/maven/maven-core/4.1.0-SNAPSHOT/maven-metadata.xml`
+ *   -> groupId "org.apache.maven", artifactId "maven-core"
+ *
+ * The plain parseMavenPath would read the version as the artifactId here.
+ */
+function parseSnapshotPath(path: string): {
+  groupId: string;
+  artifactId: string;
+} {
+  const parts = path
+    .replace(/\/maven-metadata\.xml$/, '')
+    .split('/')
+    .filter(Boolean);
+  const artifactId = parts[parts.length - 2] ?? '';
+  const groupId = parts.slice(0, -2).join('.');
+  return { groupId, artifactId };
 }
 
 /** Strip a checksum suffix to get the path of the metadata document itself. */

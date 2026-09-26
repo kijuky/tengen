@@ -524,3 +524,94 @@ describe("MavenRegistryProxy – metadata redirects", () => {
     expect(res.status).toHaveBeenCalledWith(404);
   });
 });
+
+describe("MavenRegistryProxy – snapshot metadata", () => {
+  const SNAPSHOT_PATH =
+    "/org/apache/maven/maven-core/4.1.0-SNAPSHOT/maven-metadata.xml";
+
+  function makeSnapshotXml(lastUpdated: string): string {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<metadata modelVersion="1.1.0">
+  <groupId>org.apache.maven</groupId>
+  <artifactId>maven-core</artifactId>
+  <version>4.1.0-SNAPSHOT</version>
+  <versioning>
+    <snapshot>
+      <timestamp>20240101.000000</timestamp>
+      <buildNumber>7</buildNumber>
+    </snapshot>
+    <lastUpdated>${lastUpdated}</lastUpdated>
+    <snapshotVersions>
+      <snapshotVersion>
+        <extension>jar</extension>
+        <value>4.1.0-20240101.000000-7</value>
+        <updated>${lastUpdated}</updated>
+      </snapshotVersion>
+    </snapshotVersions>
+  </versioning>
+</metadata>`;
+  }
+
+  beforeEach(() => {
+    __resetCachesForTesting();
+    mockReadFileSync.mockReturnValue(JSON.stringify({}));
+  });
+
+  it("serves a snapshot whose build is older than the cutoff", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: makeSnapshotXml("20240101000000"),
+      headers: {},
+    } as any);
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(SNAPSHOT_PATH) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(String(vi.mocked(res.send).mock.calls[0]?.[0])).toContain(
+      "<snapshotVersions>",
+    );
+  });
+
+  it("blocks a snapshot whose build is newer than the cutoff", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: makeSnapshotXml("20240201000000"),
+      headers: {},
+    } as any);
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(SNAPSHOT_PATH) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("blocks a snapshot with no readable timestamp", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: makeSnapshotXml("").replace(/<timestamp>[^<]*<\/timestamp>/, ""),
+      headers: {},
+    } as any);
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(SNAPSHOT_PATH) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("never asks deps.dev about a snapshot", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: makeSnapshotXml("20240101000000"),
+      headers: {},
+    } as any);
+
+    await proxy.handleRequest(makeReq(SNAPSHOT_PATH) as any, makeRes() as any);
+
+    expect(
+      vi.mocked(axios.get).mock.calls.filter(([u]) =>
+        String(u).includes("api.deps.dev"),
+      ),
+    ).toHaveLength(0);
+  });
+});

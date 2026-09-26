@@ -274,12 +274,15 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 | ------------------------------------------------------- | --------------------------------------------------------------------- |
 | `/{group/as/path}/{artifactId}/maven-metadata.xml`      | Filtered — version metadata XML                                       |
 | `/{...}/maven-metadata.xml.{sha1,md5,sha256,sha512}`    | Checksum recomputed over the filtered XML                             |
+| `/{...}/{version}/maven-metadata.xml`                   | Filtered — a snapshot's timestamped build; served whole or 404'd       |
 | `/{group/as/path}/{artifactId}/{version}/{file}`        | Download — redirect to upstream if allowed; 404 if version is blocked |
 | everything else                                         | Passthrough                                                           |
 
 **Metadata redirects are followed, never forwarded.** A Maven repository may answer `maven-metadata.xml` with a redirect rather than the document — `repo.scala-sbt.org/scalasbt/maven-releases` 302s to Central, `maven.google.com` 301s to `dl.google.com`, the Gradle Plugin Portal 303s to the hosting repo for a plugin's backing module. Handing that redirect to the client would send it to the upstream and skip the age and malicious filters entirely, so the hops (301, 302, 303, 307, 308) are followed server-side and the document they land on is filtered as usual. A relative `Location` is resolved against the request URL, as HTTP requires. A chain longer than three hops is answered with 502 rather than forwarded, for the same reason.
 
 **Checksums are recomputed, never forwarded.** The metadata served here is filtered, so the upstream's checksum would not match it. All four algorithms a Maven client may ask for (`sha1`, `md5`, `sha256`, `sha512`) are computed over the filtered document; Maven 3.9 and Gradle both use the SHA-2 ones.
+
+**Snapshots.** A `-SNAPSHOT` version has a second `maven-metadata.xml` inside its version directory describing one timestamped build, using `<snapshotVersions>` rather than `<versions>`. Its `<lastUpdated>` (or `<snapshot><timestamp>`) is the build's time, so no external lookup is needed — the document is served whole when that build is past the cooldown and 404'd when it is not. A snapshot under active development is therefore unavailable until its latest build ages, which is what a cooldown means for a mutable version; use the allowlist for exceptions.
 
 > **Note:** `maven-metadata.xml` does not include publication timestamps, so version timestamps are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). This external call is made regardless of the `--maven-upstream` setting.
 
