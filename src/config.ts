@@ -29,7 +29,15 @@ export interface Config {
    * Ivy-layout repositories, each mounted at its own top-level path (`/{name}`).
    * Declared with a repeatable `--ivy-repo <name>=<url>`.
    */
-  ivyRepos?: { name: string; upstream: string }[];
+  ivyRepos?: {
+    name: string;
+    upstream: string;
+    /**
+     * Source for the module's revision listing. Without it a dynamic revision
+     * cannot resolve to an allowed revision — see IvyRegistryProxy.
+     */
+    index?: 'artifactory';
+  }[];
   /** Versions published within this many days are excluded from responses */
   delayDays: number;
   /** Path to a single combined malicious DB JSON file */
@@ -108,7 +116,7 @@ const OPTIONS = {
     type: "string" as const,
     multiple: true as const,
     description:
-      "Ivy-layout repository as <name>=<url>, mounted at /<name> (repeatable). Timestamps come from the directory index and the revision's ivy.xml",
+      "Ivy-layout repository as <name>=<url>[,index=artifactory], mounted at /<name> (repeatable). Downloads are gated on the revision's ivy.xml; add index=artifactory to also serve filtered revision listings, which is what lets a dynamic revision resolve",
   },
   "maven-timestamp-source": {
     type: "string" as const,
@@ -181,7 +189,7 @@ const RESERVED_REGISTRY_NAMES = new Set([
 ]);
 
 /** A mount name has to be a single safe path segment. */
-const MAVEN_REPO_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+const REPO_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
 /**
  * Parse repeated `--<flag> <name>=<url>` values.
@@ -189,11 +197,18 @@ const MAVEN_REPO_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
  * Exits with a message rather than throwing: a malformed repository definition
  * would otherwise surface as a confusing 404 at request time.
  */
-function parseNamedRepos(
+function parseNamedRepos<T extends { name: string; upstream: string }>(
   raw: string[],
   flag: string,
-): { name: string; upstream: string }[] {
-  const repos: { name: string; upstream: string }[] = [];
+  /**
+   * Splits any trailing `,<option>=<value>` off the URL. Applied before the URL
+   * is validated, so validation and the trailing-slash trim see the URL itself
+   * and an error message quotes only that.
+   */
+  splitOptions: (repo: { name: string; upstream: string }) => T = (repo) =>
+    repo as T,
+): T[] {
+  const repos: T[] = [];
   const seen = new Set<string>();
 
   for (const entry of raw) {
@@ -205,11 +220,15 @@ function parseNamedRepos(
       process.exit(1);
     }
     const name = entry.slice(0, separator).trim();
-    const upstream = entry.slice(separator + 1).trim();
+    const split = splitOptions({
+      name,
+      upstream: entry.slice(separator + 1).trim(),
+    });
+    const upstream = split.upstream;
 
-    if (!MAVEN_REPO_NAME_PATTERN.test(name)) {
+    if (!REPO_NAME_PATTERN.test(name)) {
       console.error(
-        `Error: invalid --${flag} name '${name}' (expected a lowercase path segment matching ${MAVEN_REPO_NAME_PATTERN})`,
+        `Error: invalid --${flag} name '${name}' (expected a lowercase path segment matching ${REPO_NAME_PATTERN})`,
       );
       process.exit(1);
     }
@@ -236,10 +255,41 @@ function parseNamedRepos(
     }
 
     seen.add(name);
-    repos.push({ name, upstream: upstream.replace(/\/+$/, "") });
+    repos.push({ ...split, upstream: split.upstream.replace(/\/+$/, "") });
   }
 
   return repos;
+}
+
+/** Sources a `--ivy-repo` can read a module's revision listing from. */
+const IVY_INDEX_SOURCES = ["artifactory"] as const;
+
+/**
+ * Split a trailing `,index=<source>` off an --ivy-repo URL.
+ *
+ * The listing is what a resolver picks a dynamic revision from, so where it
+ * comes from is stated explicitly rather than guessed from the URL.
+ */
+function parseIvyIndexOption(repo: { name: string; upstream: string }): {
+  name: string;
+  upstream: string;
+  index?: (typeof IVY_INDEX_SOURCES)[number];
+} {
+  const match = /^(.*),index=([^,]*)$/.exec(repo.upstream);
+  if (!match) return repo;
+  const source = match[2]!;
+  if (!(IVY_INDEX_SOURCES as readonly string[]).includes(source)) {
+    console.error(
+      `Error: invalid index source '${source}' for --ivy-repo '${repo.name}' ` +
+        `(expected one of: ${IVY_INDEX_SOURCES.join(", ")})`,
+    );
+    process.exit(1);
+  }
+  return {
+    name: repo.name,
+    upstream: match[1]!,
+    index: source as (typeof IVY_INDEX_SOURCES)[number],
+  };
 }
 
 export function loadConfig(argv = process.argv.slice(2)): Config {
@@ -307,6 +357,7 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
   const ivyRepos = parseNamedRepos(
     (values["ivy-repo"] as string[] | undefined) ?? [],
     "ivy-repo",
+    parseIvyIndexOption,
   );
 
   const clash = mavenRepos.find((m) => ivyRepos.some((i) => i.name === m.name));

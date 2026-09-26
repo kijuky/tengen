@@ -55,7 +55,7 @@ Start the registry proxy server.
 | `--maven-upstream`          | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                 |
 | `--maven-timestamp-source`  | `deps-dev`                             | Where the built-in Maven registry reads publish timestamps: `deps-dev` (Central only) or `last-modified`. Use `last-modified` when `--maven-upstream` points somewhere other than Central |
 | `--maven-repo`              | _(none)_                               | Additional Maven repository as `<name>=<url>`, mounted at `/<name>` (repeatable). Always uses `last-modified` timestamps |
-| `--ivy-repo`                | _(none)_                               | Ivy-layout repository as `<name>=<url>`, mounted at `/<name>` (repeatable). Gates downloads on the revision's `ivys/ivy.xml` |
+| `--ivy-repo`                | _(none)_                               | Ivy-layout repository as `<name>=<url>[,index=artifactory]`, mounted at `/<name>` (repeatable). Gates downloads on the revision's `ivys/ivy.xml`; `index=artifactory` also filters revision listings, which is what lets a dynamic revision resolve |
 | `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`        | Upstream URL for the Gradle Plugin Portal                                                      |
 | `--malicious-db-path`       | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted |
 | `--allowlist-db-path`       | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)              |
@@ -319,12 +319,12 @@ The same applies to the built-in route when `--maven-upstream` is pointed somewh
 
 ### Ivy repositories
 
-sbt's built-in resolver set includes three Ivy-layout repositories, so proxying sbt means handling Ivy as well. Declare them with a repeatable `--ivy-repo <name>=<url>`:
+sbt's built-in resolver set includes three Ivy-layout repositories, so proxying sbt means handling Ivy as well. Declare them with a repeatable `--ivy-repo <name>=<url>[,index=artifactory]`:
 
 ```sh
 tengen serve \
-  --ivy-repo sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases \
-  --ivy-repo typesafe-ivy=https://repo.typesafe.com/typesafe/ivy-releases
+  --ivy-repo sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases,index=artifactory \
+  --ivy-repo typesafe-ivy=https://repo.typesafe.com/typesafe/ivy-releases,index=artifactory
 ```
 
 Ivy lays artifacts out as `{org}/{module}(/scala_{v})(/sbt_{v})/{revision}/{type}s/{artifact}(-{classifier}).{ext}`, e.g. `/ch.epfl.scala/sbt-bloop/scala_2.12/sbt_1.0/1.3.4/ivys/ivy.xml`.
@@ -332,23 +332,68 @@ Ivy lays artifacts out as `{org}/{module}(/scala_{v})(/sbt_{v})/{revision}/{type
 | Path pattern                                   | Action                                                            |
 | ---------------------------------------------- | ----------------------------------------------------------------- |
 | `/{org}/{module}/…/{revision}/{type}s/{file}`  | Gated on the revision's `ivys/ivy.xml`; 404 if inside the cooldown |
+| `/{org}/{module}/…/` (a revision listing)      | With `index=artifactory`, generated with the allowed revisions only; otherwise passthrough |
 | everything else                                | Passthrough                                                        |
 
 The revision's age comes from one HEAD of its `ivys/ivy.xml`. Redirects are followed: `repo.scala-sbt.org` and `repo.typesafe.com` both 302 to the Artifactory instance that holds the file.
 
-**Dynamic revisions are not filtered.** Ivy has no document listing a module's revisions — the equivalent of `maven-metadata.xml` does not exist. A client discovers them by reading the repository's HTML directory index, which is presentation rather than protocol: the format differs between Artifactory, Nexus 2, Nexus 3 and Clojars, and filtering it would mean tracking each of them as they change. So it is left alone.
+**Dynamic revisions need `index=artifactory`.** Ivy has no document listing a module's revisions — the equivalent of `maven-metadata.xml` does not exist. A client discovers them by reading the repository's directory index, which is HTML: presentation rather than protocol, differing between Artifactory, Nexus 2, Nexus 3 and Clojars. tengen does not read it. What it can do is answer that request itself from structured data, and `index=artifactory` says to.
 
-A pinned revision is gated regardless, which is how sbt resolves in practice — measured against sbt 1.10.7, it requests `{org}/{module}/{rev}/ivys/ivy.xml` directly with no listing.
+A pinned revision is gated either way, which is how sbt resolves in practice — measured against sbt 1.10.7, it requests `{org}/{module}/{rev}/ivys/ivy.xml` directly with no listing.
 
-The cooldown still holds for a dynamic revision, by refusing the artifact rather than by steering the choice. Measured with Coursier 2.1.25 against `sbt-plugin-releases` at `--delay-days 4000`:
+#### Without an index
+
+The cooldown still holds for a dynamic revision, but by refusing the artifact rather than by steering the choice. Measured with Coursier 2.1.25 against `sbt-plugin-releases` at `--delay-days 4000`:
 
 ```
-GET /{module}/sbt_1.0/                          307   the listing passes through
+GET /{module}/sbt_1.0/                          307   the listing passes through unfiltered
 GET /{module}/sbt_1.0/{revision}/ivys/ivy.xml   404   the chosen revision is inside the window
 Resolution error: not found
 ```
 
-The resolver picks one revision, and on 404 it stops — it does not try the next one. So a revision inside the window cannot be taken silently; resolution fails instead. It also does not fall back to an older allowed revision, so a build pinned to `latest.integration` breaks until the newest revision ages out. Which revision gets picked is the resolver's own version ordering, not the listing's order: in that run Coursier asked for `1.3.4+151-7c324c7c` while the listing ended at `1.3.4+160-681434ff`.
+The resolver picks one revision, and on 404 it stops — it does not try the next one, and it does not fall back to an older allowed revision. So nothing inside the window is served, but a build on `latest.integration` breaks until the newest revision ages out.
+
+#### With `index=artifactory`
+
+tengen answers the listing itself with only the allowed revisions, so the resolver never sees one it cannot have:
+
+```
+GET /{module}/sbt_1.0/                          200   generated, 177 of the upstream's 381 revisions
+GET /{module}/sbt_1.0/1.0.0-RC1+4-c5e24b66/…    307   the newest revision the listing offered
+```
+
+Only a directory that actually holds revisions is filtered. A path cannot say which one that is — `/ch.epfl.scala/sbt-bloop/` holds `scala_2.10` and `scala_2.12`, and `…/1.5.6/` holds `ivys` and `jars` — so the children decide: a child that dates is a revision. A directory whose children are not revisions is passed through untouched, because it has no revisions to hide:
+
+```
+GET /ch.epfl.scala/                             307   passthrough
+GET /ch.epfl.scala/sbt-bloop/                   307   passthrough (cross-version directories)
+GET /ch.epfl.scala/sbt-bloop/scala_2.12/        307   passthrough
+GET /ch.epfl.scala/sbt-bloop/…/sbt_1.0/         200   filtered (this is where revisions live)
+GET /ch.epfl.scala/sbt-bloop/…/1.5.6/           307   passthrough (ivys, jars)
+```
+
+If no child dates but the storage API says the children *do* hold artifact-type directories, they are revisions whose `ivy.xml` could not be read — that is answered with 502, never passed through. A directory whose revisions all sit inside the cooldown is a different case: they date fine, so the answer is a listing with nothing in it.
+
+Same repository, same `--delay-days 3000`, Coursier resolved `latest.integration` to `1.0.0-RC1+4-c5e24b66` and fetched the jar.
+
+The revision names come from Artifactory's storage API as JSON:
+
+```
+GET /artifactory/api/storage/{repo}/{path}
+  -> { "children": [ { "uri": "/1.0.0", "folder": true }, … ], … }
+```
+
+Each revision is then dated by the same `ivys/ivy.xml` HEAD the download gate uses, so the listing and the gate can never disagree — the folder's own `lastModified` is *not* used, because Artifactory rewrites it on re-sync: one revision of `ch.epfl.scala:sbt-bloop` has a folder stamped 2021-04-14 holding an `ivy.xml` stamped 2019-11-06. Dating a listing therefore costs one HEAD per revision, bounded at 8 in flight and cached for 10 minutes.
+
+The endpoint is resolved and verified at startup, not per request. Nothing about the URL's shape is assumed: Artifactory is commonly served under an `/artifactory` context path, but an on-prem deployment behind a reverse proxy can sit anywhere — including the host root — so where the API base ends and the repository key begins cannot be read off the URL. The configured URL is followed through its redirects (`repo.scala-sbt.org` and `repo.typesafe.com` both 302 to `scala.jfrog.io/artifactory/{repo}`), then every split of the resulting path is tried against the storage API and the one that answers with a readable `FolderInfo` wins. For `https://scala.jfrog.io/artifactory/sbt-plugin-releases` that rejects `apiBase=https://scala.jfrog.io, repo=artifactory` (404) and accepts `apiBase=…/artifactory, repo=sbt-plugin-releases`; for a reverse proxy publishing a repository at `https://repo.example.com/ivy-releases` the first split is already the right one. `api/system/version` is then read. Failure is fatal — a repository configured to filter its listings either can or tengen does not start:
+
+```
+  sbt-plugins  index via https://scala.jfrog.io/artifactory repo=sbt-plugin-releases (Artifactory 7.171.0)
+```
+
+The option is neither version-pinned nor host-pinned: the fields used here — `children[].uri`, `children[].folder` — have been in `FolderInfo` since Artifactory 2.2.1 and still are in 7.x, and a version or a URL pattern in configuration could not tell you whether a particular deployment answers, which is what the startup probe checks instead. If the API stops answering or changes shape at runtime, a listing request returns 502 rather than an unfiltered list.
+
+Which revision the resolver picks out of the listing is its own version ordering, not the listing's order: without an index, in the run above, Coursier asked for `1.3.4+151-7c324c7c` while the listing ended at `1.3.4+160-681434ff`.
 
 Malicious and allowlist lookups use the shared `maven` ecosystem, since OSV tracks JVM artifacts there regardless of repository layout.
 

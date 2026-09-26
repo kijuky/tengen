@@ -325,6 +325,58 @@ describe("loadConfig", () => {
     ]);
   });
 
+  it("parses --ivy-repo with an index source", () => {
+    const config = loadConfig([
+      "--ivy-repo",
+      "sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases,index=artifactory",
+    ]);
+    expect(config.ivyRepos).toEqual([
+      {
+        name: "sbt-plugins",
+        upstream: "https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases",
+        index: "artifactory",
+      },
+    ]);
+  });
+
+  it("validates the URL without the index option attached", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() =>
+      loadConfig(["--ivy-repo", "x=not-a-url,index=artifactory"]),
+    ).toThrow("process.exit called");
+    expect(errSpy.mock.calls[0]?.[0]).toContain("'not-a-url'");
+    expect(errSpy.mock.calls[0]?.[0]).not.toContain("index=artifactory");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("trims a trailing slash that sits before the index option", () => {
+    expect(
+      loadConfig([
+        "--ivy-repo",
+        "x=https://a.example.com/ivy/,index=artifactory",
+      ]).ivyRepos,
+    ).toEqual([
+      { name: "x", upstream: "https://a.example.com/ivy", index: "artifactory" },
+    ]);
+  });
+
+  it("exits on an unknown --ivy-repo index source", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() =>
+      loadConfig(["--ivy-repo", "x=https://a.example.com/ivy,index=nexus"]),
+    ).toThrow("process.exit called");
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
   it("applies the same name rules to --ivy-repo", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
