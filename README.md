@@ -273,10 +273,11 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 | Path pattern                                            | Action                                                                |
 | ------------------------------------------------------- | --------------------------------------------------------------------- |
 | `/{group/as/path}/{artifactId}/maven-metadata.xml`      | Filtered — version metadata XML                                       |
-| `/{group/as/path}/{artifactId}/maven-metadata.xml.sha1` | Filtered — SHA1 checksum of filtered XML                              |
-| `/{group/as/path}/{artifactId}/maven-metadata.xml.md5`  | Filtered — MD5 checksum of filtered XML                               |
+| `/{...}/maven-metadata.xml.{sha1,md5,sha256,sha512}`    | Checksum recomputed over the filtered XML                             |
 | `/{group/as/path}/{artifactId}/{version}/{file}`        | Download — redirect to upstream if allowed; 404 if version is blocked |
 | everything else                                         | Passthrough                                                           |
+
+**Checksums are recomputed, never forwarded.** The metadata served here is filtered, so the upstream's checksum would not match it. All four algorithms a Maven client may ask for (`sha1`, `md5`, `sha256`, `sha512`) are computed over the filtered document; Maven 3.9 and Gradle both use the SHA-2 ones.
 
 > **Note:** `maven-metadata.xml` does not include publication timestamps, so version timestamps are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). This external call is made regardless of the `--maven-upstream` setting.
 

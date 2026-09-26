@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { MavenRegistryProxy } from "./maven.ts";
+import { __resetCachesForTesting } from "./base.ts";
 import { makeReq, makeRes } from "./test-helpers.ts";
 
 vi.mock("axios", () => ({
@@ -360,5 +361,53 @@ describe("MavenRegistryProxy – malicious filtering", () => {
     const body = vi.mocked(res.send).mock.calls[0][0] as string;
     expect(body).not.toContain("<version>1.0.0</version>");
     expect(body).toContain("<version>2.0.0</version>");
+  });
+});
+
+describe("MavenRegistryProxy – metadata checksums", () => {
+  const XML_PATH = "/com/example/mylib/maven-metadata.xml";
+
+  beforeEach(() => {
+    __resetCachesForTesting();
+    mockReadFileSync.mockReturnValue(JSON.stringify({}));
+    vi.mocked(axios.get).mockImplementation(((url: string) => {
+      if (String(url).includes("api.deps.dev")) {
+        return Promise.resolve({
+          status: 200,
+          data: {
+            versions: [
+              { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
+            ],
+          },
+          headers: {},
+        });
+      }
+      return Promise.resolve({ status: 200, data: makeXml(["1.0.0"]), headers: {} });
+    }) as any);
+  });
+
+  it.each(["sha1", "md5", "sha256", "sha512"] as const)(
+    "recomputes the %s of the filtered metadata",
+    async (algo) => {
+      const docRes = makeRes();
+      await proxy.handleRequest(makeReq(XML_PATH) as any, docRes as any);
+      const filtered = String(vi.mocked(docRes.send).mock.calls[0]?.[0]);
+
+      const sumRes = makeRes();
+      await proxy.handleRequest(makeReq(`${XML_PATH}.${algo}`) as any, sumRes as any);
+
+      expect(String(vi.mocked(sumRes.send).mock.calls[0]?.[0])).toBe(
+        createHash(algo).update(filtered).digest("hex"),
+      );
+      expect(sumRes.status).toHaveBeenCalledWith(200);
+    },
+  );
+
+  it("does not mistake a metadata checksum for an artifact download", async () => {
+    // /com/example/mylib/maven-metadata.xml.sha512 has four path segments, the
+    // same depth as an artifact, and used to be parsed as version "mylib".
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(`${XML_PATH}.sha512`) as any, res as any);
+    expect(res.status).not.toHaveBeenCalledWith(404);
   });
 });

@@ -22,9 +22,8 @@ export class MavenRegistryProxy extends RegistryProxy {
 
   /**
    * Routes requests:
-   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml        → filtered XML metadata
-   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml.sha1  → SHA1 of filtered XML
-   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml.md5   → MD5 of filtered XML
+   *   /{groupId/as/path}/{artifactId}/maven-metadata.xml         → filtered XML metadata
+   *   /{...}/maven-metadata.xml.{sha1,md5,sha256,sha512}         → checksum of filtered XML
    *   /{groupId/as/path}/{artifactId}/{version}/{file}          → download check (403 if version blocked)
    *   everything else                                           → passthrough
    */
@@ -123,11 +122,7 @@ export class MavenRegistryProxy extends RegistryProxy {
       res.status(404).json({ error: 'Not found' });
       return;
     }
-    const suffix = req.path.endsWith('.sha1')
-      ? 'sha1'
-      : req.path.endsWith('.md5')
-        ? 'md5'
-        : null;
+    const suffix = metadataChecksum(req.path);
     if (suffix) {
       const hash = createHash(suffix).update(filteredMetadata).digest('hex');
       res.status(200).type('text/plain').send(hash);
@@ -137,16 +132,43 @@ export class MavenRegistryProxy extends RegistryProxy {
   }
 }
 
+/**
+ * Checksums a Maven client may ask for alongside maven-metadata.xml.
+ *
+ * The metadata served here is filtered, so its checksums have to be recomputed
+ * over the filtered document — returning the upstream's checksum would not
+ * match what the client just received. Maven 3.9 and Gradle both use sha256 and
+ * sha512, so limiting this to sha1/md5 breaks them.
+ */
+const METADATA_CHECKSUMS = ['sha1', 'md5', 'sha256', 'sha512'] as const;
+
+type MetadataChecksum = (typeof METADATA_CHECKSUMS)[number];
+
+const METADATA_PATH = new RegExp(
+  `/maven-metadata\\.xml(\\.(?:${METADATA_CHECKSUMS.join('|')}))?$`,
+);
+
 function isMavenMetadataPath(path: string): boolean {
-  return (
-    path.endsWith('/maven-metadata.xml') ||
-    path.endsWith('/maven-metadata.xml.sha1') ||
-    path.endsWith('/maven-metadata.xml.md5')
-  );
+  return METADATA_PATH.test(path);
 }
 
-/** Returns true for version-specific artifact paths: /{groupId}/{artifactId}/{version}/{file} */
+/** The checksum a metadata request asks for, or null for the document itself. */
+function metadataChecksum(path: string): MetadataChecksum | null {
+  const match = METADATA_PATH.exec(path);
+  const suffix = match?.[1];
+  return suffix ? (suffix.slice(1) as MetadataChecksum) : null;
+}
+
+/**
+ * Returns true for version-specific artifact paths:
+ * `/{groupId}/{artifactId}/{version}/{file}`.
+ *
+ * maven-metadata.xml and its checksums live at the same depth but are not
+ * artifacts — treating `/org/apache/commons/commons-lang3/maven-metadata.xml.sha512`
+ * as a download parsed `commons-lang3` as the version and 404'd the request.
+ */
 function isMavenDownloadPath(path: string): boolean {
+  if (isMavenMetadataPath(path)) return false;
   return path.split('/').filter(Boolean).length >= 4;
 }
 
@@ -170,10 +192,10 @@ function parseMavenDownloadPath(path: string): {
   return { groupId, artifactId, version };
 }
 
+/** Strip a checksum suffix to get the path of the metadata document itself. */
 function getXmlPath(path: string): string {
-  if (path.endsWith('.sha1')) return path.slice(0, -5);
-  if (path.endsWith('.md5')) return path.slice(0, -4);
-  return path;
+  const checksum = metadataChecksum(path);
+  return checksum ? path.slice(0, -(checksum.length + 1)) : path;
 }
 
 /**
