@@ -64,6 +64,7 @@ export function createServer(config: Config): express.Express {
     }),
     new MavenRegistryProxy({
       upstream: config.upstreams.maven,
+      timestampSource: config.mavenTimestampSource ?? 'deps-dev',
       delayMs,
       maliciousDbPath,
       allowlistDbPath,
@@ -78,6 +79,22 @@ export function createServer(config: Config): express.Express {
       upstreamAccess,
       baseUrl,
     }),
+    // Extra Maven repositories declared with --maven-repo, each mounted at its
+    // own top-level path. deps.dev only indexes Central, so these read publish
+    // timestamps from the upstream's Last-Modified headers.
+    ...(config.mavenRepos ?? []).map(
+      (repo) =>
+        new MavenRegistryProxy({
+          name: repo.name,
+          upstream: repo.upstream,
+          timestampSource: 'last-modified',
+          delayMs,
+          maliciousDbPath,
+          allowlistDbPath,
+          upstreamAccess,
+          baseUrl,
+        }),
+    ),
   ];
 
   for (const registry of registries) {
@@ -135,6 +152,9 @@ export async function startServer(
     console.log(`tengen registry proxy started`);
     for (const [name, url] of Object.entries(config.upstreams)) {
       console.log(`  ${name.padEnd(10)}  ${url}`);
+    }
+    for (const repo of config.mavenRepos ?? []) {
+      console.log(`  ${repo.name.padEnd(10)}  ${repo.upstream} (maven, last-modified)`);
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
     console.log(`  upstream-access: ${config.upstreamAccess}`);

@@ -15,6 +15,16 @@ export interface Config {
     maven: string;
     gradlePlugins: string;
   };
+  /**
+   * Additional Maven-layout repositories, each mounted at its own top-level path
+   * (`/{name}`). Declared with a repeatable `--maven-repo <name>=<url>`.
+   *
+   * These read publish timestamps from the upstream's `Last-Modified` headers,
+   * since deps.dev only indexes Maven Central.
+   */
+  mavenRepos?: { name: string; upstream: string }[];
+  /** Where the built-in Maven registry reads publish timestamps from */
+  mavenTimestampSource?: 'deps-dev' | 'last-modified';
   /** Versions published within this many days are excluded from responses */
   delayDays: number;
   /** Path to a single combined malicious DB JSON file */
@@ -83,6 +93,18 @@ const OPTIONS = {
     default: "https://repo.maven.apache.org/maven2",
     description: "Upstream URL for Maven Central",
   },
+  "maven-repo": {
+    type: "string" as const,
+    multiple: true as const,
+    description:
+      "Additional Maven repository as <name>=<url>, mounted at /<name> (repeatable). Timestamps come from the upstream's Last-Modified header, since deps.dev only indexes Central",
+  },
+  "maven-timestamp-source": {
+    type: "string" as const,
+    default: "deps-dev",
+    description:
+      "Where the built-in Maven registry reads publish timestamps: 'deps-dev' (Central only) or 'last-modified'. Use 'last-modified' when --maven-upstream points somewhere other than Central",
+  },
   "gradle-plugins-upstream": {
     type: "string" as const,
     default: "https://plugins.gradle.org/m2",
@@ -136,6 +158,79 @@ function buildHelp(): string {
   return lines.join("\n");
 }
 
+/** Names already taken by the built-in registries; an extra repo cannot shadow one. */
+const RESERVED_REGISTRY_NAMES = new Set([
+  "npm",
+  "pypi",
+  "rubygems",
+  "go",
+  "composer",
+  "maven",
+  "gradle-plugins",
+]);
+
+/** A mount name has to be a single safe path segment. */
+const MAVEN_REPO_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * Parse repeated `--<flag> <name>=<url>` values.
+ *
+ * Exits with a message rather than throwing: a malformed repository definition
+ * would otherwise surface as a confusing 404 at request time.
+ */
+function parseNamedRepos(
+  raw: string[],
+  flag: string,
+): { name: string; upstream: string }[] {
+  const repos: { name: string; upstream: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of raw) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0 || separator === entry.length - 1) {
+      console.error(
+        `Error: invalid --${flag} '${entry}' (expected <name>=<url>, e.g. sbt-releases=https://repo.scala-sbt.org/scalasbt/maven-releases)`,
+      );
+      process.exit(1);
+    }
+    const name = entry.slice(0, separator).trim();
+    const upstream = entry.slice(separator + 1).trim();
+
+    if (!MAVEN_REPO_NAME_PATTERN.test(name)) {
+      console.error(
+        `Error: invalid --${flag} name '${name}' (expected a lowercase path segment matching ${MAVEN_REPO_NAME_PATTERN})`,
+      );
+      process.exit(1);
+    }
+    if (RESERVED_REGISTRY_NAMES.has(name)) {
+      console.error(
+        `Error: --${flag} name '${name}' is reserved by a built-in registry`,
+      );
+      process.exit(1);
+    }
+    if (seen.has(name)) {
+      console.error(`Error: duplicate --${flag} name '${name}'`);
+      process.exit(1);
+    }
+    try {
+      const parsed = new URL(upstream);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("must use http or https");
+      }
+    } catch {
+      console.error(
+        `Error: invalid --${flag} url '${upstream}' for '${name}' (expected an absolute http(s) URL)`,
+      );
+      process.exit(1);
+    }
+
+    seen.add(name);
+    repos.push({ name, upstream: upstream.replace(/\/+$/, "") });
+  }
+
+  return repos;
+}
+
 export function loadConfig(argv = process.argv.slice(2)): Config {
   const { values } = nodeParseArgs({ args: argv, options: OPTIONS });
 
@@ -183,6 +278,22 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     process.exit(1);
   }
 
+  const mavenTimestampSource = values["maven-timestamp-source"] as string;
+  if (
+    mavenTimestampSource !== "deps-dev" &&
+    mavenTimestampSource !== "last-modified"
+  ) {
+    console.error(
+      `Error: invalid --maven-timestamp-source '${mavenTimestampSource}' (expected 'deps-dev' or 'last-modified')`,
+    );
+    process.exit(1);
+  }
+
+  const mavenRepos = parseNamedRepos(
+    (values["maven-repo"] as string[] | undefined) ?? [],
+    "maven-repo",
+  );
+
   return {
     host: values["host"] as string,
     port: parseInt(values["port"] as string, 10),
@@ -195,6 +306,8 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
       maven: values["maven-upstream"] as string,
       gradlePlugins: values["gradle-plugins-upstream"] as string,
     },
+    mavenRepos,
+    mavenTimestampSource,
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,
