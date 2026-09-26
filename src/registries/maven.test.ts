@@ -411,3 +411,116 @@ describe("MavenRegistryProxy – metadata checksums", () => {
     expect(res.status).not.toHaveBeenCalledWith(404);
   });
 });
+
+describe("MavenRegistryProxy – metadata redirects", () => {
+  const PATH = "/com/example/mylib/maven-metadata.xml";
+  const UPSTREAM = "https://repo1.maven.org/maven2";
+
+  /**
+   * Answer the metadata URL with `hops` redirects before the document, then
+   * answer deps.dev.
+   */
+  function mockChain(hops: number, status = 302, xml = makeXml(["1.0.0"])) {
+    let call = 0;
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.includes("api.deps.dev")) {
+        return {
+          status: 200,
+          headers: {},
+          data: {
+            versions: [
+              {
+                versionKey: { version: "1.0.0" },
+                publishedAt: new Date(BEFORE_CUTOFF).toISOString(),
+              },
+            ],
+          },
+        } as any;
+      }
+      if (call++ < hops) {
+        return {
+          status,
+          headers: { location: `https://elsewhere.example.com/hop${call}` },
+          data: "",
+        } as any;
+      }
+      return { status: 200, headers: {}, data: xml } as any;
+    });
+  }
+
+  it.each([301, 302, 303, 307, 308])(
+    "follows a %i and filters the document it lands on",
+    async (status) => {
+      mockChain(1, status);
+
+      const res = makeRes();
+      await proxy.handleRequest(makeReq(PATH), res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(vi.mocked(res.send).mock.calls[0]?.[0]).toContain(
+        "<version>1.0.0</version>",
+      );
+      expect(res.redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it("resolves a relative Location against the request URL, not the repository root", async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url === `${UPSTREAM}${PATH}`) {
+        return {
+          status: 302,
+          headers: { location: "../other/maven-metadata.xml" },
+          data: "",
+        } as any;
+      }
+      if (url.includes("api.deps.dev")) {
+        return { status: 200, headers: {}, data: { versions: [] } } as any;
+      }
+      return { status: 200, headers: {}, data: makeXml([]) } as any;
+    });
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(PATH), res);
+
+    expect(vi.mocked(axios.get).mock.calls[1]?.[0]).toBe(
+      "https://repo1.maven.org/maven2/com/example/other/maven-metadata.xml",
+    );
+  });
+
+  it("refuses rather than forward a chain longer than the cap", async () => {
+    // Forwarding the redirect would send the client to the upstream and skip
+    // the filters entirely — the bypass the following exists to close.
+    mockChain(99);
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(PATH), res);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.redirect).not.toHaveBeenCalled();
+    expect(res.set).not.toHaveBeenCalledWith("location", expect.anything());
+  });
+
+  it("stops following at the cap", async () => {
+    mockChain(99);
+
+    await proxy.handleRequest(makeReq(PATH), makeRes());
+
+    const metadataCalls = vi
+      .mocked(axios.get)
+      .mock.calls.filter((c) => !String(c[0]).includes("api.deps.dev"));
+    expect(metadataCalls).toHaveLength(4); // the first request plus 3 hops
+  });
+
+  it("passes a non-redirect error status through unchanged", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 404,
+      headers: {},
+      data: "not found",
+    } as any);
+
+    const res = makeRes();
+    await proxy.handleRequest(makeReq(PATH), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+});

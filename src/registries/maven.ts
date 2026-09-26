@@ -17,6 +17,12 @@ interface DepsDevVersionResponse {
   publishedAt: string;
 }
 
+/** Upper bound on redirect hops when resolving metadata. */
+const MAX_METADATA_REDIRECTS = 3;
+
+/** Statuses that carry a `Location` worth following for a GET. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
 export class MavenRegistryProxy extends RegistryProxy {
   readonly name: string = 'maven';
 
@@ -63,13 +69,58 @@ export class MavenRegistryProxy extends RegistryProxy {
     };
   }
 
+  /**
+   * Fetch the upstream maven-metadata.xml, following redirects server-side.
+   *
+   * Several Maven repositories answer metadata with a redirect rather than the
+   * document — `repo.scala-sbt.org/scalasbt/maven-releases` 302s to Central and
+   * `maven.google.com` 301s to `dl.google.com`, for two. Handing that redirect
+   * to the client would send it straight to the upstream and bypass the age and
+   * malicious filters entirely, so the hops are followed here and the resolved
+   * document is filtered as usual.
+   */
   protected async fetchUpstreamXml(req: Request) {
     const base = this.config.upstream.replace(/\/$/, '');
-    return axios.get<string>(`${base}${getXmlPath(req.path)}`, {
+    let url = `${base}${getXmlPath(req.path)}`;
+    let res = await axios.get<string>(url, {
       responseType: 'text',
       validateStatus: () => true,
       maxRedirects: 0,
     });
+
+    for (let hops = 0; hops < MAX_METADATA_REDIRECTS; hops++) {
+      const location = res.headers['location'];
+      if (!REDIRECT_STATUSES.has(res.status) || typeof location !== 'string') {
+        return res;
+      }
+      try {
+        url = new URL(location, url).toString();
+      } catch {
+        return res;
+      }
+      res = await axios.get<string>(url, {
+        responseType: 'text',
+        validateStatus: () => true,
+        maxRedirects: 0,
+      });
+    }
+
+    // Still redirecting after the cap. Handing this back would let the base
+    // class forward the redirect, and the client would then fetch the metadata
+    // from the upstream unfiltered — the very bypass the loop above exists to
+    // close. Refuse instead.
+    if (REDIRECT_STATUSES.has(res.status)) {
+      return {
+        ...res,
+        status: 502,
+        headers: { 'content-type': 'application/json' },
+        data: JSON.stringify({
+          error: 'Bad Gateway',
+          message: `metadata for ${getXmlPath(req.path)} redirected more than ${MAX_METADATA_REDIRECTS} times`,
+        }),
+      };
+    }
+    return res;
   }
 
   private async fetchVersions(
