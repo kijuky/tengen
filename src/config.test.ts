@@ -308,7 +308,51 @@ describe("loadConfig", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  it("has no ivy repos by default", () => {
+    expect(loadConfig([]).ivyRepos).toEqual([]);
+  });
 
+  it("parses --ivy-repo", () => {
+    const config = loadConfig([
+      "--ivy-repo",
+      "sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases",
+    ]);
+    expect(config.ivyRepos).toEqual([
+      {
+        name: "sbt-plugins",
+        upstream: "https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases",
+      },
+    ]);
+  });
 
+  it("applies the same name rules to --ivy-repo", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
 
+    expect(() =>
+      loadConfig(["--ivy-repo", "maven=https://a.example.com/ivy"]),
+    ).toThrow("process.exit called");
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("exits when a name is used by both --maven-repo and --ivy-repo", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+
+    expect(() =>
+      loadConfig([
+        "--maven-repo",
+        "dup=https://a.example.com/m2",
+        "--ivy-repo",
+        "dup=https://a.example.com/ivy",
+      ]),
+    ).toThrow("process.exit called");
+    expect(errSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
 });

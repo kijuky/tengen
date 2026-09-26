@@ -55,6 +55,7 @@ Start the registry proxy server.
 | `--maven-upstream`          | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                 |
 | `--maven-timestamp-source`  | `deps-dev`                             | Where the built-in Maven registry reads publish timestamps: `deps-dev` (Central only) or `last-modified`. Use `last-modified` when `--maven-upstream` points somewhere other than Central |
 | `--maven-repo`              | _(none)_                               | Additional Maven repository as `<name>=<url>`, mounted at `/<name>` (repeatable). Always uses `last-modified` timestamps |
+| `--ivy-repo`                | _(none)_                               | Ivy-layout repository as `<name>=<url>`, mounted at `/<name>` (repeatable). Gates downloads on the revision's `ivys/ivy.xml` |
 | `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`        | Upstream URL for the Gradle Plugin Portal                                                      |
 | `--malicious-db-path`       | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted |
 | `--allowlist-db-path`       | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)              |
@@ -315,6 +316,41 @@ Two caveats:
 - Ties are normal: a repository that re-syncs stamps every file with the same mtime. When the filtered `<latest>` has to be chosen among versions sharing a timestamp, the document's own ordering decides, where Maven puts the newest last.
 
 The same applies to the built-in route when `--maven-upstream` is pointed somewhere other than Central — pass `--maven-timestamp-source last-modified` in that case, otherwise every version comes back unknown and the metadata is served empty.
+
+### Ivy repositories
+
+sbt's built-in resolver set includes three Ivy-layout repositories, so proxying sbt means handling Ivy as well. Declare them with a repeatable `--ivy-repo <name>=<url>`:
+
+```sh
+tengen serve \
+  --ivy-repo sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases \
+  --ivy-repo typesafe-ivy=https://repo.typesafe.com/typesafe/ivy-releases
+```
+
+Ivy lays artifacts out as `{org}/{module}(/scala_{v})(/sbt_{v})/{revision}/{type}s/{artifact}(-{classifier}).{ext}`, e.g. `/ch.epfl.scala/sbt-bloop/scala_2.12/sbt_1.0/1.3.4/ivys/ivy.xml`.
+
+| Path pattern                                   | Action                                                            |
+| ---------------------------------------------- | ----------------------------------------------------------------- |
+| `/{org}/{module}/…/{revision}/{type}s/{file}`  | Gated on the revision's `ivys/ivy.xml`; 404 if inside the cooldown |
+| everything else                                | Passthrough                                                        |
+
+The revision's age comes from one HEAD of its `ivys/ivy.xml`. Redirects are followed: `repo.scala-sbt.org` and `repo.typesafe.com` both 302 to the Artifactory instance that holds the file.
+
+**Dynamic revisions are not filtered.** Ivy has no document listing a module's revisions — the equivalent of `maven-metadata.xml` does not exist. A client discovers them by reading the repository's HTML directory index, which is presentation rather than protocol: the format differs between Artifactory, Nexus 2, Nexus 3 and Clojars, and filtering it would mean tracking each of them as they change. So it is left alone.
+
+A pinned revision is gated regardless, which is how sbt resolves in practice — measured against sbt 1.10.7, it requests `{org}/{module}/{rev}/ivys/ivy.xml` directly with no listing.
+
+The cooldown still holds for a dynamic revision, by refusing the artifact rather than by steering the choice. Measured with Coursier 2.1.25 against `sbt-plugin-releases` at `--delay-days 4000`:
+
+```
+GET /{module}/sbt_1.0/                          307   the listing passes through
+GET /{module}/sbt_1.0/{revision}/ivys/ivy.xml   404   the chosen revision is inside the window
+Resolution error: not found
+```
+
+The resolver picks one revision, and on 404 it stops — it does not try the next one. So a revision inside the window cannot be taken silently; resolution fails instead. It also does not fall back to an older allowed revision, so a build pinned to `latest.integration` breaks until the newest revision ages out. Which revision gets picked is the resolver's own version ordering, not the listing's order: in that run Coursier asked for `1.3.4+151-7c324c7c` while the listing ended at `1.3.4+160-681434ff`.
+
+Malicious and allowlist lookups use the shared `maven` ecosystem, since OSV tracks JVM artifacts there regardless of repository layout.
 
 ### Gradle Plugin Portal
 

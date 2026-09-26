@@ -25,6 +25,11 @@ export interface Config {
   mavenRepos?: { name: string; upstream: string }[];
   /** Where the built-in Maven registry reads publish timestamps from */
   mavenTimestampSource?: 'deps-dev' | 'last-modified';
+  /**
+   * Ivy-layout repositories, each mounted at its own top-level path (`/{name}`).
+   * Declared with a repeatable `--ivy-repo <name>=<url>`.
+   */
+  ivyRepos?: { name: string; upstream: string }[];
   /** Versions published within this many days are excluded from responses */
   delayDays: number;
   /** Path to a single combined malicious DB JSON file */
@@ -98,6 +103,12 @@ const OPTIONS = {
     multiple: true as const,
     description:
       "Additional Maven repository as <name>=<url>, mounted at /<name> (repeatable). Timestamps come from the upstream's Last-Modified header, since deps.dev only indexes Central",
+  },
+  "ivy-repo": {
+    type: "string" as const,
+    multiple: true as const,
+    description:
+      "Ivy-layout repository as <name>=<url>, mounted at /<name> (repeatable). Timestamps come from the directory index and the revision's ivy.xml",
   },
   "maven-timestamp-source": {
     type: "string" as const,
@@ -293,6 +304,18 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     (values["maven-repo"] as string[] | undefined) ?? [],
     "maven-repo",
   );
+  const ivyRepos = parseNamedRepos(
+    (values["ivy-repo"] as string[] | undefined) ?? [],
+    "ivy-repo",
+  );
+
+  const clash = mavenRepos.find((m) => ivyRepos.some((i) => i.name === m.name));
+  if (clash) {
+    console.error(
+      `Error: '${clash.name}' is declared as both a --maven-repo and an --ivy-repo`,
+    );
+    process.exit(1);
+  }
 
   return {
     host: values["host"] as string,
@@ -308,6 +331,7 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     },
     mavenRepos,
     mavenTimestampSource,
+    ivyRepos,
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,

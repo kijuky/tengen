@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadConfig, type Config } from './config.ts';
 import { MavenRegistryProxy } from './registries/maven.ts';
+import { IvyRegistryProxy } from './registries/ivy.ts';
 import { GradlePluginsRegistryProxy } from './registries/gradle-plugins.ts';
 import { NpmRegistryProxy } from './registries/npm.ts';
 import { PypiRegistryProxy } from './registries/pypi.ts';
@@ -95,6 +96,20 @@ export function createServer(config: Config): express.Express {
           baseUrl,
         }),
     ),
+    // Ivy-layout repositories declared with --ivy-repo. sbt's default resolver
+    // set includes three of them, so proxying sbt means handling Ivy.
+    ...(config.ivyRepos ?? []).map(
+      (repo) =>
+        new IvyRegistryProxy({
+          name: repo.name,
+          upstream: repo.upstream,
+          delayMs,
+          maliciousDbPath,
+          allowlistDbPath,
+          upstreamAccess,
+          baseUrl,
+        }),
+    ),
   ];
 
   for (const registry of registries) {
@@ -155,6 +170,9 @@ export async function startServer(
     }
     for (const repo of config.mavenRepos ?? []) {
       console.log(`  ${repo.name.padEnd(10)}  ${repo.upstream} (maven, last-modified)`);
+    }
+    for (const repo of config.ivyRepos ?? []) {
+      console.log(`  ${repo.name.padEnd(10)}  ${repo.upstream} (ivy)`);
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
     console.log(`  upstream-access: ${config.upstreamAccess}`);
