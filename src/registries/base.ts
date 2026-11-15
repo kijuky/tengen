@@ -410,11 +410,16 @@ export abstract class RegistryProxy {
     req: Request,
     res: Response,
   ): Promise<void> {
+    // Ask for the artifact as it is. Left to its default, axios accepts
+    // gzip and brotli, and the compressed bytes would be stored and replayed
+    // to clients that cannot decode them — Coursier then sees a checksum that
+    // does not match.
     const upstream = await axios.get(
       version.upstreamUrl ?? this.buildUpstreamUrl(req),
       {
         responseType: 'stream',
         decompress: false,
+        headers: { 'accept-encoding': 'identity' },
         validateStatus: () => true,
       },
     );
@@ -427,7 +432,12 @@ export abstract class RegistryProxy {
       res.setHeader(key, value as string | string[]);
     }
 
-    if (upstream.status === 200) {
+    // An upstream that encodes anyway is relayed as it answered, but not
+    // stored: only the artifact itself is kept.
+    const encoding = upstream.headers['content-encoding'];
+    const encoded =
+      typeof encoding === 'string' && encoding !== '' && encoding !== 'identity';
+    if (upstream.status === 200 && !encoded) {
       const headers: Partial<Record<(typeof CACHED_HEADERS)[number], string>> =
         {};
       for (const key of CACHED_HEADERS) {
