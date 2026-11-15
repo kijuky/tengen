@@ -59,6 +59,7 @@ Start the registry proxy server.
 | `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`        | Upstream URL for the Gradle Plugin Portal                                                      |
 | `--malicious-db-path`       | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted |
 | `--allowlist-db-path`       | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)              |
+| `--cache-dir`               | _(none)_                               | Directory to keep downloaded artifacts in. Disabled when unset. See [Download cache](#download-cache) |
 
 ### `tengen build-malicious-db`
 
@@ -132,6 +133,24 @@ The proxy needs to know its own externally-visible URL to build these links, so 
 
 ```sh
 tengen serve --upstream-access proxied --base-url https://tengen.example.com
+```
+
+## Download cache
+
+With `--cache-dir <path>`, an allowed artifact download is fetched through the proxy, stored, and served from disk afterwards. Only downloads are stored; metadata is still fetched and filtered on every request.
+
+The cache sits behind the filters, so a stored artifact is judged again on every request:
+
+- Each entry keeps the version it belongs to, and a hit is judged with that and the local malicious DB. The upstream is not asked, so stored artifacts stay available while it is unreachable.
+- A stored artifact whose version is now in the malicious DB is refused with a 404 and removed from the cache.
+- At startup, every stored artifact the malicious DB lists is removed. The DB is read once per process, so restarting after an update of the DB sweeps it.
+
+Artifacts are stored whichever `--upstream-access` is set, since their bytes have to pass through the proxy. Maven and Ivy `-SNAPSHOT` versions are not stored, because the same path can be redeployed with new contents. Nothing is evicted; the cache grows with what is downloaded.
+
+Each registry keeps its own subdirectory (`<cache-dir>/<registry name>`). Each entry is a data file and a JSON sidecar named by the SHA-256 of the request path.
+
+```sh
+tengen serve --cache-dir /data/cache
 ```
 
 ## Package manager configuration

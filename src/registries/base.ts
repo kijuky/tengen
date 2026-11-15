@@ -1,7 +1,15 @@
 import axios, { type AxiosResponse } from 'axios';
 import type { Request, Response } from 'express';
 import { readFileSync } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import type { AllowlistDb, MaliciousDb } from '../types.ts';
+import {
+  CACHED_HEADERS,
+  DownloadCache,
+  type CachedArtifact,
+} from './download-cache.ts';
 
 export interface RegistryConfig {
   /** Upstream registry base URL */
@@ -49,6 +57,14 @@ export interface RegistryConfig {
    * non-Maven registries.
    */
   timestampSource?: 'deps-dev' | 'last-modified';
+  /**
+   * Directory to keep downloaded artifacts in. When set, an allowed download is
+   * fetched through the proxy, stored, and served from disk afterwards. A
+   * stored artifact is judged again on every request, so a version that later
+   * lands in the malicious DB stops being served and is removed. Each registry
+   * keeps its own subdirectory named after the registry.
+   */
+  cacheDir?: string;
 }
 
 export interface VersionMetadata {
@@ -156,9 +172,34 @@ export abstract class RegistryProxy {
     | null
     | undefined = undefined;
 
+  private downloadCacheInstance: DownloadCache | null | undefined = undefined;
+
   constructor(config: RegistryConfig) {
     this.config = config;
     this.setRouting();
+  }
+
+  /**
+   * The download cache, or null when `cacheDir` is not configured. Created on
+   * first use because `name` is an abstract field that a subclass assigns
+   * after this class's constructor has run.
+   */
+  private get downloadCache(): DownloadCache | null {
+    if (this.downloadCacheInstance === undefined) {
+      this.downloadCacheInstance = this.config.cacheDir
+        ? new DownloadCache(join(this.config.cacheDir, this.name))
+        : null;
+    }
+    return this.downloadCacheInstance;
+  }
+
+  /**
+   * Whether a download of this version may be stored. An artifact that can
+   * change under the same path — a Maven `-SNAPSHOT` — must not be, or the
+   * cache would keep serving an old build.
+   */
+  protected isCacheable(_version: VersionMetadata): boolean {
+    return true;
   }
 
   protected setRouting() {}
@@ -270,19 +311,161 @@ export abstract class RegistryProxy {
     req: Request,
     res: Response,
   ) {
-    const versionMeta = await route.getVersionMetadata(req);
-    if (
-      versionMeta === null ||
-      this.filterVersions([versionMeta]).length === 0
-    ) {
+    const respondBlocked = () => {
       if (route.respondBlocked) {
         route.respondBlocked(res, req);
       } else {
         res.status(404).json({ error: 'Version not allowed' });
       }
+    };
+    const cache = this.downloadCache;
+    const isRead = req.method === 'GET' || req.method === 'HEAD';
+
+    if (cache !== null && isRead) {
+      const cached = await cache.lookup(req.path);
+      if (cached !== null) {
+        // Judged again with what was stored, not with a fresh upstream lookup:
+        // the malicious DB is local and a publish date does not change, so a
+        // stored artifact stays servable while the upstream is unreachable.
+        if (this.filterVersions([cached.version]).length === 0) {
+          if (this.isKnownMalicious(cached.version)) {
+            await cache.remove(req.path);
+            console.log(
+              `[${this.name}] removed ${req.path} from the cache: ` +
+                `${cached.version.packageName}@${cached.version.version} is in the malicious DB`,
+            );
+          }
+          respondBlocked();
+          return;
+        }
+        await this.serveCached(cached, req, res);
+        return;
+      }
+    }
+
+    const versionMeta = await route.getVersionMetadata(req);
+    if (
+      versionMeta === null ||
+      this.filterVersions([versionMeta]).length === 0
+    ) {
+      respondBlocked();
+      return;
+    }
+    if (cache !== null && req.method === 'GET' && this.isCacheable(versionMeta)) {
+      await this.fetchIntoCache(cache, versionMeta, req, res);
       return;
     }
     await this.handlePassthrough(req, res);
+  }
+
+  /** Answer a download from the cache. */
+  private async serveCached(
+    cached: CachedArtifact,
+    req: Request,
+    res: Response,
+  ): Promise<void> {
+    res.status(200);
+    for (const [key, value] of Object.entries(cached.headers)) {
+      if (value !== undefined) res.setHeader(key, value);
+    }
+    res.setHeader('content-length', String(cached.size));
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    const handle = await open(cached.dataFile, 'r');
+    const stream = handle.createReadStream();
+    stream.on('error', (err) => res.destroy(err));
+    stream.pipe(res);
+  }
+
+  /**
+   * Fetch an allowed download from the upstream, stream it to the client and
+   * store it at the same time.
+   *
+   * The upstream is followed through redirects here, unlike the passthrough:
+   * the bytes have to pass through the proxy to be stored, whichever
+   * `upstreamAccess` is configured.
+   */
+  private async fetchIntoCache(
+    cache: DownloadCache,
+    version: VersionMetadata,
+    req: Request,
+    res: Response,
+  ): Promise<void> {
+    const upstream = await axios.get(this.buildUpstreamUrl(req), {
+      responseType: 'stream',
+      decompress: false,
+      validateStatus: () => true,
+    });
+    const body = upstream.data as NodeJS.ReadableStream;
+
+    res.status(upstream.status);
+    for (const [key, value] of Object.entries(upstream.headers)) {
+      if (value === undefined) continue;
+      if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
+      res.setHeader(key, value as string | string[]);
+    }
+
+    if (upstream.status === 200) {
+      const headers: Partial<Record<(typeof CACHED_HEADERS)[number], string>> =
+        {};
+      for (const key of CACHED_HEADERS) {
+        const value = upstream.headers[key];
+        if (typeof value === 'string') headers[key] = value;
+      }
+      const length = Number(upstream.headers['content-length']);
+      const toCache = new PassThrough();
+      body.pipe(toCache);
+      // Storing is independent of the client: an artifact it stopped reading
+      // half way is still kept whole, and a failed store does not fail the
+      // response.
+      cache
+        .store(req.path, toCache, {
+          expectedSize: Number.isFinite(length) ? length : undefined,
+          headers,
+          version,
+        })
+        .catch((err) => {
+          console.error(
+            `[${this.name}] could not cache ${req.path}: ${String(err)}`,
+          );
+        });
+    }
+
+    body.on('error', (err) => {
+      if (res.headersSent) {
+        res.destroy(err instanceof Error ? err : new Error(String(err)));
+      } else {
+        res.status(502).json({ error: 'Bad Gateway', message: String(err) });
+      }
+    });
+    body.pipe(res);
+  }
+
+  /**
+   * Remove every cached artifact whose version is now in the malicious DB.
+   *
+   * A request for such an artifact already removes it, but one nobody asks for
+   * again would stay on disk; the malicious DB is read once per process, so a
+   * sweep at startup covers each update of it.
+   *
+   * @returns the number of artifacts removed
+   */
+  async purgeMaliciousFromCache(): Promise<number> {
+    const cache = this.downloadCache;
+    if (cache === null) return 0;
+    let removed = 0;
+    for await (const entry of cache.entries()) {
+      if (!this.isKnownMalicious(entry.version)) continue;
+      await cache.remove(entry.path);
+      removed++;
+      console.log(
+        `[${this.name}] removed ${entry.path} from the cache: ` +
+          `${entry.version.packageName}@${entry.version.version} is in the malicious DB`,
+      );
+    }
+    return removed;
   }
 
   protected async handlePassthrough(
@@ -411,6 +594,19 @@ export abstract class RegistryProxy {
       this.cachedAllowlist = null;
     }
     return this.cachedAllowlist;
+  }
+
+  /**
+   * Whether the malicious DB lists this version, ignoring the age filter and
+   * the allowlist — the allowlist only exempts from the age filter.
+   */
+  protected isKnownMalicious(version: VersionMetadata): boolean {
+    const db = this.getMaliciousDB();
+    if (db === null) return false;
+    return (
+      db.packages.has(version.packageName) ||
+      db.versions.get(version.packageName)?.has(version.version) === true
+    );
   }
 
   protected filterVersions(versions: VersionMetadata[]) {

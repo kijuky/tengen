@@ -62,6 +62,7 @@ export function createServer(
   const allowlistDbPath = config.allowlistDbPath;
   const upstreamAccess = config.upstreamAccess;
   const baseUrl = config.baseUrl;
+  const cacheDir = config.cacheDir;
   const registries = [
     new NpmRegistryProxy({
       upstream: config.upstreams.npm,
@@ -70,6 +71,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     new PypiRegistryProxy({
       upstream: config.upstreams.pypi,
@@ -78,6 +80,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     new RubygemsRegistryProxy({
       upstream: config.upstreams.rubygems,
@@ -86,6 +89,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     new GoRegistryProxy({
       upstream: config.upstreams.go,
@@ -94,6 +98,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     new ComposerRegistryProxy({
       upstream: config.upstreams.composer,
@@ -102,6 +107,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     new MavenRegistryProxy({
       upstream: config.upstreams.maven,
@@ -111,6 +117,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     new GradlePluginsRegistryProxy({
       upstream: config.upstreams.gradlePlugins,
@@ -119,6 +126,7 @@ export function createServer(
       allowlistDbPath,
       upstreamAccess,
       baseUrl,
+      cacheDir,
     }),
     // Extra Maven repositories declared with --maven-repo, each mounted at its
     // own top-level path. deps.dev only indexes Central, so these read publish
@@ -134,6 +142,7 @@ export function createServer(
           allowlistDbPath,
           upstreamAccess,
           baseUrl,
+          cacheDir,
         }),
     ),
     // Ivy-layout repositories declared with --ivy-repo. sbt's default resolver
@@ -149,9 +158,22 @@ export function createServer(
           allowlistDbPath,
           upstreamAccess,
           baseUrl,
+          cacheDir,
         }),
     ),
   ];
+
+  if (cacheDir) {
+    // The malicious DB is read once per process, so each start is when an
+    // updated DB first applies; sweep what it now lists out of the cache.
+    for (const registry of registries) {
+      registry.purgeMaliciousFromCache().catch((err) => {
+        console.error(
+          `[${registry.name}] could not sweep the cache: ${String(err)}`,
+        );
+      });
+    }
+  }
 
   for (const registry of registries) {
     app.use(`/${registry.name}`, (req, res) => {
@@ -232,6 +254,9 @@ export async function startServer(
       console.log(`  base-url:   ${config.baseUrl}`);
     }
     console.log(`  malicious:  ${config.maliciousDbPath}`);
+    if (config.cacheDir) {
+      console.log(`  cache:      ${config.cacheDir}`);
+    }
     if (config.allowlistDbPath) {
       console.log(`  allowlist:  ${config.allowlistDbPath}`);
     }
