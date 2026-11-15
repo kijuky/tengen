@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import { createHash } from 'node:crypto';
 import {
   RegistryProxy,
@@ -22,6 +22,18 @@ interface DepsDevVersionResponse {
   publishedAt: string;
 }
 
+/** An upstream's maven-metadata.xml and the versions in it that may be offered. */
+interface ResolvedMetadata {
+  xml: string;
+  allowed: VersionMetadata[];
+}
+
+interface MavenCoordinates {
+  groupId: string;
+  artifactId: string;
+  version: string;
+}
+
 /** How many `Last-Modified` probes run at once. */
 const PROBE_CONCURRENCY = 8;
 
@@ -38,8 +50,16 @@ const PROBE_TTL_MS = 10 * 60 * 1000;
 /** How many probed timestamps are kept before the oldest are dropped. */
 const PROBE_CACHE_MAX = 10_000;
 
-/** `url -> published`, shared across registry instances. */
-const probeCache = new TtlCache<Date | null>(PROBE_TTL_MS, PROBE_CACHE_MAX);
+/** What a HEAD of a URL said, shared across registry instances. */
+interface HeadResult {
+  /** Whether the upstream has the file (answered 200). */
+  found: boolean;
+  /** Its `Last-Modified`, when it has the file and sent a readable one. */
+  lastModified: Date | null;
+}
+
+/** `url -> HEAD result`, shared across registry instances. */
+const probeCache = new TtlCache<HeadResult>(PROBE_TTL_MS, PROBE_CACHE_MAX);
 
 /** @internal Reset the probe cache. Used by tests; not part of the public API. */
 export function __resetProbeCacheForTesting() {
@@ -52,28 +72,51 @@ const MAX_METADATA_REDIRECTS = 3;
 /** Statuses that carry a `Location` worth following for a GET/HEAD. */
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+/** One upstream of a Maven-layout registry. */
+export interface MavenUpstream {
+  url: string;
+  /**
+   * Where version publish timestamps are read from:
+   * - "deps-dev": query the deps.dev API. A version deps.dev has no record of
+   *   stays blocked (fail-closed). deps.dev only indexes Maven Central.
+   * - "last-modified": HEAD the version's POM on the upstream and use its
+   *   `Last-Modified` header.
+   */
+  timestamps: 'deps-dev' | 'last-modified';
+}
+
+export interface MavenRegistryConfig extends RegistryConfig {
+  /**
+   * The upstreams, searched in order. More than one makes a group: metadata
+   * is merged across them and each artifact is served by the first upstream
+   * that holds it. Unset means `upstream`, dated through deps.dev.
+   */
+  upstreams?: MavenUpstream[];
+}
+
 export class MavenRegistryProxy extends RegistryProxy {
   readonly name: string;
 
-  constructor(config: RegistryConfig) {
+  constructor(config: MavenRegistryConfig) {
     super(config);
     this.name = config.name ?? 'maven';
+  }
+
+  /**
+   * Read off `config` rather than held in a field: the base constructor calls
+   * `setRouting()`, which runs before a subclass's own initialisers.
+   */
+  private get upstreams(): MavenUpstream[] {
+    const configured = (this.config as MavenRegistryConfig).upstreams;
+    if (configured && configured.length > 0) return configured;
+    return [
+      { url: this.config.upstream.replace(/\/$/, ''), timestamps: 'deps-dev' },
+    ];
   }
 
   /** A `-SNAPSHOT` path can be redeployed with new contents. */
   protected override isCacheable(version: VersionMetadata): boolean {
     return !version.version.endsWith('-SNAPSHOT');
-  }
-
-  /**
-   * deps.dev only indexes Maven Central, so a repository other than Central has
-   * to read timestamps from its own `Last-Modified` headers. The two sources are
-   * exclusive: with "deps-dev" a missing deps.dev record leaves the version
-   * unknown and it stays blocked, which is the existing fail-closed behaviour
-   * for Central and is deliberately not softened here.
-   */
-  protected get timestampSource(): 'deps-dev' | 'last-modified' {
-    return this.config.timestampSource ?? 'deps-dev';
   }
 
   /**
@@ -85,14 +128,9 @@ export class MavenRegistryProxy extends RegistryProxy {
    *   everything else                                           → passthrough
    */
   public setRouting() {
-    this.addMetadataRoute<string>({
+    this.addCustomRoute({
       condition: (req) => isMavenMetadataPath(req.path),
-      requestUpstream: (req) => this.fetchUpstreamXml(req),
-      getVersions: (metadata, req) => this.fetchVersions(metadata, req),
-      filterMetadata: (metadata, allowedVersions) =>
-        this.filterXml(metadata, allowedVersions),
-      respond: (res, filteredMetadata, req) =>
-        this.respondWithMetadata(res, filteredMetadata, req),
+      handle: (req, res) => this.respondMetadata(req, res),
     });
 
     this.addDownloadRoute({
@@ -101,22 +139,141 @@ export class MavenRegistryProxy extends RegistryProxy {
     });
   }
 
+  /**
+   * Answer a maven-metadata.xml request (or one for its checksum) from every
+   * upstream at once, each filtered with its own timestamps, then merged.
+   */
+  private async respondMetadata(req: Request, res: Response): Promise<void> {
+    const xmlPath = getXmlPath(req.path);
+    const results = await Promise.all(
+      this.upstreams.map((upstream) => this.resolveMetadata(upstream, xmlPath)),
+    );
+    const found = results.filter((r): r is ResolvedMetadata => 'xml' in r);
+    if (found.length === 0) {
+      // Nothing to serve. A failure other than "not here" says more than a
+      // 404 would, so it is the one passed on.
+      const { response } = (results.find(
+        (r) => 'response' in r && r.response.status !== 404,
+      ) ?? results[0]!) as { response: AxiosResponse<string> };
+      res
+        .status(response.status)
+        .type(
+          (response.headers['content-type'] as string | undefined) ||
+            'application/json',
+        )
+        .send(response.data);
+      return;
+    }
+    this.respondWithMetadata(res, this.mergeMetadata(found), req);
+  }
+
+  private async resolveMetadata(
+    upstream: MavenUpstream,
+    xmlPath: string,
+  ): Promise<ResolvedMetadata | { response: AxiosResponse<string> }> {
+    const response = await this.fetchUpstreamXml(upstream, xmlPath);
+    if (response.status !== 200) return { response };
+    const xml = response.data;
+    const versions = await this.fetchVersions(upstream, xml, xmlPath);
+    return { xml, allowed: this.filterVersions(versions) };
+  }
+
+  /**
+   * Combine the filtered documents of the upstreams that had one.
+   *
+   * A version belongs to the first upstream that lists it: that is the one a
+   * download of it is served from, so it is also the one whose verdict counts —
+   * a version blocked there is not offered on the strength of another
+   * upstream's copy.
+   */
+  private mergeMetadata(found: ResolvedMetadata[]): string {
+    if (found.length === 1) {
+      return this.filterXml(found[0]!.xml, found[0]!.allowed);
+    }
+
+    const listings = found.filter((f) => f.xml.includes('<versions>'));
+    if (listings.length === 0) {
+      // A snapshot's version-level document describes one build, served by
+      // the first upstream whose build is past the cooldown.
+      if (found.some((f) => f.xml.includes('<snapshotVersions>'))) {
+        const allowed = found.find(
+          (f) => f.xml.includes('<snapshotVersions>') && f.allowed.length > 0,
+        );
+        return allowed?.xml ?? '';
+      }
+      // Group-level metadata (a plugin group's listing) carries no versions.
+      return found[0]!.xml;
+    }
+
+    const merged: VersionMetadata[] = [];
+    const seen = new Set<string>();
+    for (const listing of listings) {
+      const allowed = new Map(listing.allowed.map((v) => [v.version, v]));
+      for (const version of parseVersionsFromXml(listing.xml)) {
+        if (seen.has(version)) continue;
+        seen.add(version);
+        const meta = allowed.get(version);
+        if (meta) merged.push(meta);
+      }
+    }
+    if (merged.length === 0) return '';
+
+    const order = new Map(merged.map((v, i) => [v.version, i] as const));
+    const latest = merged.reduce((acc, v) => {
+      if (v.published > acc.published) return v;
+      if (v.published < acc.published) return acc;
+      return order.get(v.version)! > order.get(acc.version)! ? v : acc;
+    });
+    const template = listings[0]!.xml.replace(
+      /<versions>[\s\S]*?<\/versions>/,
+      `<versions>${merged.map((v) => `<version>${v.version}</version>`).join('')}</versions>`,
+    );
+    return (
+      filterMavenMetadataXml(
+        template,
+        new Set(merged.map((v) => v.version)),
+        latest.version,
+        latest.published,
+      ) ?? ''
+    );
+  }
+
+  /**
+   * Date a download. A group serves it from the first upstream that holds the
+   * file, and that upstream's timestamps decide; a single upstream is asked
+   * directly, as it is the only place the file can come from.
+   */
   private async getDownloadVersionMetadata(
     req: Request,
   ): Promise<VersionMetadata | null> {
     const parsed = parseMavenDownloadPath(req.path);
     if (!parsed) return null;
-    const { groupId, artifactId, version } = parsed;
+    const upstreams = this.upstreams;
+    if (upstreams.length === 1) {
+      return this.dateDownload(upstreams[0]!, req.path, parsed);
+    }
+    for (const upstream of upstreams) {
+      const url = `${upstream.url}${req.path}`;
+      if (!(await this.head(url)).found) continue;
+      const meta = await this.dateDownload(upstream, req.path, parsed);
+      return meta ? { ...meta, upstreamUrl: url } : null;
+    }
+    return null;
+  }
+
+  private async dateDownload(
+    upstream: MavenUpstream,
+    path: string,
+    { groupId, artifactId, version }: MavenCoordinates,
+  ): Promise<VersionMetadata | null> {
     const packageName = `${groupId}:${artifactId}`;
 
-    if (this.timestampSource === 'last-modified') {
+    if (upstream.timestamps === 'last-modified') {
       // Probe the requested file itself rather than a constructed POM path: a
       // snapshot artifact is named {artifact}-{version}-{timestamp}-{build}.ext
       // and has no {artifact}-{version}.pom beside it, so deriving the POM name
       // would 404 and block every snapshot download.
-      const published = await this.fetchLastModified(
-        `${this.config.upstream.replace(/\/$/, '')}${req.path}`,
-      );
+      const published = await this.fetchLastModified(`${upstream.url}${path}`);
       if (!published) return null;
       return { packageName, version, published };
     }
@@ -143,9 +300,11 @@ export class MavenRegistryProxy extends RegistryProxy {
    * malicious filters entirely, so the hops are followed here and the resolved
    * document is filtered as usual.
    */
-  protected async fetchUpstreamXml(req: Request) {
-    const base = this.config.upstream.replace(/\/$/, '');
-    let url = `${base}${getXmlPath(req.path)}`;
+  protected async fetchUpstreamXml(
+    upstream: MavenUpstream,
+    xmlPath: string,
+  ): Promise<AxiosResponse<string>> {
+    let url = `${upstream.url}${xmlPath}`;
     let res = await axios.get<string>(url, {
       responseType: 'text',
       validateStatus: () => true,
@@ -180,7 +339,7 @@ export class MavenRegistryProxy extends RegistryProxy {
         headers: { 'content-type': 'application/json' },
         data: JSON.stringify({
           error: 'Bad Gateway',
-          message: `metadata for ${getXmlPath(req.path)} redirected more than ${MAX_METADATA_REDIRECTS} times`,
+          message: `metadata for ${xmlPath} redirected more than ${MAX_METADATA_REDIRECTS} times`,
         }),
       };
     }
@@ -188,24 +347,30 @@ export class MavenRegistryProxy extends RegistryProxy {
   }
 
   private async fetchVersions(
+    upstream: MavenUpstream,
     metadata: string,
-    req: Request,
+    xmlPath: string,
   ): Promise<VersionMetadata[]> {
     // A version-level maven-metadata.xml describes one timestamped SNAPSHOT
     // build and carries its own timestamp, so it needs neither deps.dev nor a
     // probe.
     if (metadata.includes('<snapshotVersions>')) {
-      return snapshotVersions(metadata, getXmlPath(req.path));
+      return snapshotVersions(metadata, xmlPath);
     }
 
     // Group-level metadata lists plugins/artifacts without <versions> — skip search
     if (!metadata.includes('<versions>')) return [];
 
-    const { groupId, artifactId } = parseMavenPath(getXmlPath(req.path));
+    const { groupId, artifactId } = parseMavenPath(xmlPath);
     const packageName = `${groupId}:${artifactId}`;
 
-    if (this.timestampSource === 'last-modified') {
-      return this.fetchVersionsViaLastModified(metadata, groupId, artifactId);
+    if (upstream.timestamps === 'last-modified') {
+      return this.fetchVersionsViaLastModified(
+        upstream,
+        metadata,
+        groupId,
+        artifactId,
+      );
     }
 
     const res = await axios.get<DepsDevPackageResponse>(
@@ -242,6 +407,7 @@ export class MavenRegistryProxy extends RegistryProxy {
    * stops early is therefore unsound.
    */
   private async fetchVersionsViaLastModified(
+    upstream: MavenUpstream,
     metadata: string,
     groupId: string,
     artifactId: string,
@@ -260,7 +426,7 @@ export class MavenRegistryProxy extends RegistryProxy {
       }));
     }
 
-    const probed = await this.probeAll(groupId, artifactId, versions);
+    const probed = await this.probeAll(upstream, groupId, artifactId, versions);
     const resolved: VersionMetadata[] = [];
     for (const [version, published] of probed) {
       if (!published) continue;
@@ -271,6 +437,7 @@ export class MavenRegistryProxy extends RegistryProxy {
 
   /** Probe every version's timestamp, bounded to PROBE_CONCURRENCY at a time. */
   private async probeAll(
+    upstream: MavenUpstream,
     groupId: string,
     artifactId: string,
     versions: string[],
@@ -284,7 +451,12 @@ export class MavenRegistryProxy extends RegistryProxy {
         const version = versions[i]!;
         out[i] = [
           version,
-          await this.fetchPublishedViaLastModified(groupId, artifactId, version),
+          await this.fetchPublishedViaLastModified(
+            upstream,
+            groupId,
+            artifactId,
+            version,
+          ),
         ];
       }
     };
@@ -303,29 +475,28 @@ export class MavenRegistryProxy extends RegistryProxy {
    * that is rewritten on every build, so that stands in as the probe.
    */
   private async fetchPublishedViaLastModified(
+    upstream: MavenUpstream,
     groupId: string,
     artifactId: string,
     version: string,
   ): Promise<Date | null> {
-    const base = this.config.upstream.replace(/\/$/, '');
     const groupPath = groupId.split('.').join('/');
-    const dir = `${base}/${groupPath}/${artifactId}/${version}`;
+    const dir = `${upstream.url}/${groupPath}/${artifactId}/${version}`;
     const file = version.endsWith('-SNAPSHOT')
       ? 'maven-metadata.xml'
       : `${artifactId}-${version}.pom`;
     return this.fetchLastModified(`${dir}/${file}`);
   }
 
-  /** HEAD a URL and read its `Last-Modified` header, cached for PROBE_TTL_MS. */
+  /** A URL's `Last-Modified`, or null when it is missing or unreadable. */
   private async fetchLastModified(url: string): Promise<Date | null> {
-    const hit = probeCache.get(url);
-    if (hit !== undefined) return hit;
-    const published = await this.headLastModified(url);
-    probeCache.set(url, published);
-    return published;
+    return (await this.head(url)).lastModified;
   }
 
-  private async headLastModified(url: string): Promise<Date | null> {
+  /** HEAD a URL, cached for PROBE_TTL_MS. */
+  private async head(url: string): Promise<HeadResult> {
+    const hit = probeCache.get(url);
+    if (hit !== undefined) return hit;
     // Follow redirects: a repository may point at where the artifact really
     // lives (e.g. repo.scala-sbt.org 302s to Central), and that is the file
     // whose timestamp matters.
@@ -333,11 +504,17 @@ export class MavenRegistryProxy extends RegistryProxy {
       validateStatus: () => true,
       maxRedirects: MAX_METADATA_REDIRECTS,
     });
-    if (res.status !== 200) return null;
+    const result: HeadResult = {
+      found: res.status === 200,
+      lastModified: null,
+    };
     const lastModified = res.headers['last-modified'];
-    if (typeof lastModified !== 'string') return null;
-    const published = new Date(lastModified);
-    return Number.isNaN(published.getTime()) ? null : published;
+    if (result.found && typeof lastModified === 'string') {
+      const published = new Date(lastModified);
+      if (!Number.isNaN(published.getTime())) result.lastModified = published;
+    }
+    probeCache.set(url, result);
+    return result;
   }
 
   private filterXml(

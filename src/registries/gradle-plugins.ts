@@ -19,7 +19,7 @@ import { MavenRegistryProxy } from './maven.ts';
  * server-side, so that resolves through the age/malicious filter as usual.
  */
 export class GradlePluginsRegistryProxy extends MavenRegistryProxy {
-  readonly name = 'gradle-plugins';
+  readonly name: string = this.config.name ?? 'gradle-plugins';
 
   protected override get dbKey(): string {
     return 'maven';

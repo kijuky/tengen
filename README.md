@@ -53,10 +53,8 @@ Start the registry proxy server.
 | `--go-upstream`             | `https://proxy.golang.org`             | Upstream URL for Go module proxy                                                               |
 | `--composer-upstream`       | `https://packagist.org`                | Upstream URL for Composer (Packagist)                                                          |
 | `--maven-upstream`          | `https://repo.maven.apache.org/maven2` | Upstream URL for Maven Central                                                                 |
-| `--maven-timestamp-source`  | `deps-dev`                             | Where the built-in Maven registry reads publish timestamps: `deps-dev` (Central only) or `last-modified`. Use `last-modified` when `--maven-upstream` points somewhere other than Central |
-| `--maven-repo`              | _(none)_                               | Additional Maven repository as `<name>=<url>`, mounted at `/<name>` (repeatable). Always uses `last-modified` timestamps |
-| `--ivy-repo`                | _(none)_                               | Ivy-layout repository as `<name>=<url>[,index=artifactory]`, mounted at `/<name>` (repeatable). Gates downloads on the revision's `ivys/ivy.xml`; `index=artifactory` also filters revision listings, which is what lets a dynamic revision resolve |
 | `--gradle-plugins-upstream` | `https://plugins.gradle.org/m2`        | Upstream URL for the Gradle Plugin Portal                                                      |
+| `--registry`                | _(none)_                               | Registry as `<type>[:<name>]=<upstream>[,<upstream>...][;<key>=<value>...]` (repeatable). See [Registries](#registries---registry) |
 | `--malicious-db-path`       | _(built into a temp file)_             | Path to the combined malicious-package DB JSON; built into a temp file on startup when omitted |
 | `--allowlist-db-path`       | _(none)_                               | Path to the combined allowlist JSON (per-registry exemptions from the age filter)              |
 | `--cache-dir`               | _(none)_                               | Directory to keep downloaded artifacts in. Disabled when unset. See [Download cache](#download-cache) |
@@ -68,6 +66,41 @@ Download and build the malicious-package database.
 | Option         | Default      | Description                                            |
 | -------------- | ------------ | ------------------------------------------------------ |
 | `-o, --output` | _(required)_ | Output path for the combined malicious-package DB JSON |
+
+## Registries (`--registry`)
+
+The built-in registries (`npm`, `pypi`, `rubygems`, `go`, `composer`, `maven`, `gradle-plugins`) are always served, each at `/<name>` with its default upstream. `--registry` replaces one, or adds another:
+
+```
+--registry <type>[:<name>]=<upstream>[,<upstream>...][;<key>=<value>...]
+```
+
+| Part                       | Meaning                                                                                       | Example                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `<type>`                   | `npm`, `pypi`, `rubygems`, `go`, `composer`, `maven`, `gradle-plugins` or `ivy`                | `maven`                                   |
+| `:<name>`                  | The path it is mounted at. Defaults to the type, so it is only written for a second one       | `maven:internal` → `/internal`            |
+| `<upstream>,<upstream>...` | Two or more make a group, searched in the order written (`maven` and `ivy` only)               |                                           |
+| `#<key>=<value>`           | A setting for one upstream, in its URL fragment — never sent to the server                     | `…/sbt-plugin-releases#index=artifactory` |
+| `;<key>=<value>`           | A setting for the whole registry                                                               | `;public-url=https://npm.example.com`     |
+
+| Setting                                | Applies to              | Meaning                                                                                       |
+| -------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| `#timestamps=deps-dev\|last-modified` | `maven`, `gradle-plugins` upstreams | Where publish timestamps come from. Defaults to `deps-dev` for Maven Central (`repo.maven.apache.org`, `repo1.maven.org`, Google's Central mirror) and the Gradle Plugin Portal, `last-modified` otherwise |
+| `#index=artifactory`                   | `ivy` upstreams         | Serve filtered revision listings — see [Ivy repositories](#ivy-repositories)                  |
+| `;public-url=<url>`                    | `npm`, `pypi`, `rubygems`, `go`, `composer` | See [Per-registry public URLs](#per-registry-public-urls)                 |
+
+A setting a type does not use, a group of a type that cannot group, a name used twice — anything that would not take effect — stops tengen at startup rather than being ignored.
+
+The `--<type>-upstream` flags are kept as a shorthand for `--registry <type>=<url>`. Setting the same registry both ways is refused.
+
+```sh
+tengen serve \
+  --registry 'npm=https://registry.npmjs.org;public-url=https://npm.example.com' \
+  --registry 'maven=https://repo.maven.apache.org/maven2,https://repo.scala-sbt.org/scalasbt/maven-releases,https://maven.google.com' \
+  --registry 'ivy=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases#index=artifactory,https://repo.typesafe.com/typesafe/ivy-releases'
+```
+
+`;` and `#` have to be quoted in a shell; an exec-form `command:` in Compose passes them as written.
 
 ## Malicious-package database
 
@@ -134,6 +167,28 @@ The proxy needs to know its own externally-visible URL to build these links, so 
 ```sh
 tengen serve --upstream-access proxied --base-url https://tengen.example.com
 ```
+
+### Per-registry public URLs
+
+tengen serves every registry under a path prefix (`/npm`, `/pypi`, …) and, with `--base-url`, rewrites artifact URLs to `<base-url>/<name>/...`. Those URLs end up in lockfiles, so they tie clients to tengen's layout.
+
+To keep it out, put each registry on its own host, have a reverse proxy add the prefix, and give tengen that host with `;public-url=`:
+
+```sh
+tengen serve --upstream-access proxied --base-url https://tengen.example.com \
+  --registry 'npm=https://registry.npmjs.org;public-url=https://npm.example.com'
+```
+
+```caddyfile
+npm.example.com {
+	rewrite * /npm{uri}
+	reverse_proxy tengen:3000
+}
+```
+
+npm's `dist.tarball` then becomes `https://npm.example.com/lodash/-/lodash-4.17.21.tgz` — the same shape as the upstream's, which any npm registry can serve. Upstream redirects that tengen relays for metadata (e.g. PyPI's name normalization) point under the public URL too. Artifact URLs are rewritten in either `--upstream-access` mode, since setting a public URL says clients should fetch through it.
+
+Maven and Ivy registries take no public URL: their metadata holds no URLs — clients build artifact paths from the repository URL they are configured with — so serving one at the root of its own host already keeps tengen's path out of client configuration.
 
 ## Download cache
 
@@ -306,23 +361,23 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 
 **Snapshots.** A `-SNAPSHOT` version has a second `maven-metadata.xml` inside its version directory describing one timestamped build. Its `<lastUpdated>` (or `<snapshot><timestamp>`) is the build's time, so no external lookup is needed — the document is served whole when that build is past the cooldown and 404'd when it is not. A snapshot under active development is therefore unavailable until its latest build ages, which is what a cooldown means for a mutable version; use the allowlist for exceptions. On the artifact-level listing, a `-SNAPSHOT` entry is probed through that same version-directory `maven-metadata.xml` rather than a `{artifact}-{version}.pom`, which snapshots do not have.
 
-> **Note:** `maven-metadata.xml` does not include publication timestamps, so version timestamps are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). This external call is made regardless of the `--maven-upstream` setting.
+> **Note:** `maven-metadata.xml` does not include publication timestamps, so for Maven Central they are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). An upstream on a Central mirror under another host needs `#timestamps=deps-dev` to keep using it.
 
-### Additional Maven repositories
+### Maven groups and other repositories
 
-deps.dev only indexes Maven Central, so the built-in `/maven` route is Central-only by default. Other Maven-layout repositories are declared with a repeatable `--maven-repo <name>=<url>` and mounted at their own top-level path:
+A `maven` registry with more than one upstream is a group, like a repository group in Nexus: one URL for several repositories, so a client does not need to know which one holds what.
 
 ```sh
-tengen serve \
-  --maven-repo sbt-releases=https://repo.scala-sbt.org/scalasbt/maven-releases \
-  --maven-repo scala-nightlies=https://repo.scala-lang.org/artifactory/maven-nightlies
+tengen serve --registry 'maven=https://repo.maven.apache.org/maven2,https://repo.scala-sbt.org/scalasbt/maven-releases,https://repo.clojars.org,https://maven.google.com'
 ```
 
-`/sbt-releases/...` and `/scala-nightlies/...` then behave exactly like `/maven/...` — same routing, metadata filtering and download gating.
+- **Metadata** is fetched from every upstream at once, each filtered with its own timestamps, and merged. A version belongs to the first upstream that lists it: that is where a download of it comes from, so that upstream's verdict is the one that counts — a version blocked there is not offered on the strength of another upstream's copy.
+- **A download** is served by the first upstream that holds the file, and dated by that upstream. If that upstream blocks it, or its date cannot be read, the answer is 404; it is not passed on to a later upstream's copy.
+- An upstream without the metadata contributes nothing. When none has it, a failure other than 404 is passed on in preference to a 404.
 
-Names must be a single lowercase path segment and cannot shadow a built-in registry (`npm`, `pypi`, `rubygems`, `go`, `composer`, `maven`, `gradle-plugins`).
+A second Maven registry at its own path is declared with a name, e.g. `--registry 'maven:internal=https://m2.example.com'`.
 
-**Timestamps outside Central.** These repositories read each version's publish time from the `Last-Modified` header of its POM instead of deps.dev.
+**Timestamps outside Central.** An upstream other than Maven Central reads each version's publish time from the `Last-Modified` header of its POM instead of deps.dev.
 
 `<lastUpdated>` records when the metadata was last rewritten, which is when its newest version appeared, so when that is already past the cooldown every version in the document is older still and none are probed — the common case costs no extra requests at all. Otherwise something landed inside the window and every version is probed, in parallel and through a short-lived cache.
 
@@ -334,24 +389,25 @@ Two caveats:
 - A version whose `Last-Modified` cannot be read is treated as unknown and excluded, the same as with a missing deps.dev record.
 - Ties are normal: a repository that re-syncs stamps every file with the same mtime. When the filtered `<latest>` has to be chosen among versions sharing a timestamp, the document's own ordering decides, where Maven puts the newest last.
 
-The same applies to the built-in route when `--maven-upstream` is pointed somewhere other than Central — pass `--maven-timestamp-source last-modified` in that case, otherwise every version comes back unknown and the metadata is served empty.
+Which source an upstream uses is decided from its host, since deps.dev only indexes Central. A Central mirror under another host can say `#timestamps=deps-dev`, and any upstream can say `#timestamps=last-modified`.
 
 ### Ivy repositories
 
-sbt's built-in resolver set includes three Ivy-layout repositories, so proxying sbt means handling Ivy as well. Declare them with a repeatable `--ivy-repo <name>=<url>[,index=artifactory]`:
+sbt's built-in resolver set includes three Ivy-layout repositories, so proxying sbt means handling Ivy as well. There is no built-in Ivy registry; declare one, as a group if there are several:
 
 ```sh
 tengen serve \
-  --ivy-repo sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases,index=artifactory \
-  --ivy-repo typesafe-ivy=https://repo.typesafe.com/typesafe/ivy-releases,index=artifactory
+  --registry 'ivy=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases#index=artifactory,https://repo.typesafe.com/typesafe/ivy-releases#index=artifactory'
 ```
+
+In a group, a file is served by the first upstream that holds its revision (its `ivys/ivy.xml` answers), dated by that upstream; if that upstream blocks it or its date cannot be read, the answer is 404 rather than a later upstream's copy. Revision listings are merged across the upstreams with `#index=artifactory`, each filtered with its own dates; upstreams without one contribute no listing. An upstream that cannot list a module contributes nothing, and the listing is refused only when none can.
 
 Ivy lays artifacts out as `{org}/{module}(/scala_{v})(/sbt_{v})/{revision}/{type}s/{artifact}(-{classifier}).{ext}`, e.g. `/ch.epfl.scala/sbt-bloop/scala_2.12/sbt_1.0/1.3.4/ivys/ivy.xml`.
 
 | Path pattern                                   | Action                                                            |
 | ---------------------------------------------- | ----------------------------------------------------------------- |
 | `/{org}/{module}/…/{revision}/{type}s/{file}`  | Gated on the revision's `ivys/ivy.xml`; 404 if inside the cooldown |
-| `/{org}/{module}/…/` (a revision listing)      | With `index=artifactory`, generated with the allowed revisions only; otherwise passthrough |
+| `/{org}/{module}/…/` (a revision listing)      | With `#index=artifactory`, generated with the allowed revisions only; otherwise passthrough |
 | everything else                                | Passthrough                                                        |
 
 The revision's age comes from one HEAD of its `ivys/ivy.xml`. Redirects are followed: `repo.scala-sbt.org` and `repo.typesafe.com` both 302 to the Artifactory instance that holds the file.
@@ -407,7 +463,8 @@ Each revision is then dated by the same `ivys/ivy.xml` HEAD the download gate us
 The endpoint is resolved and verified at startup, not per request. Nothing about the URL's shape is assumed: Artifactory is commonly served under an `/artifactory` context path, but an on-prem deployment behind a reverse proxy can sit anywhere — including the host root — so where the API base ends and the repository key begins cannot be read off the URL. The configured URL is followed through its redirects (`repo.scala-sbt.org` and `repo.typesafe.com` both 302 to `scala.jfrog.io/artifactory/{repo}`), then every split of the resulting path is tried against the storage API and the one that answers with a readable `FolderInfo` wins. For `https://scala.jfrog.io/artifactory/sbt-plugin-releases` that rejects `apiBase=https://scala.jfrog.io, repo=artifactory` (404) and accepts `apiBase=…/artifactory, repo=sbt-plugin-releases`; for a reverse proxy publishing a repository at `https://repo.example.com/ivy-releases` the first split is already the right one. `api/system/version` is then read. Failure is fatal — a repository configured to filter its listings either can or tengen does not start:
 
 ```
-  sbt-plugins  index via https://scala.jfrog.io/artifactory repo=sbt-plugin-releases (Artifactory 7.171.0)
+  /ivy
+    https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases (index=artifactory via https://scala.jfrog.io/artifactory (Artifactory 7.178.1))
 ```
 
 The option is neither version-pinned nor host-pinned: the fields used here — `children[].uri`, `children[].folder` — have been in `FolderInfo` since Artifactory 2.2.1 and still are in 7.x, and a version or a URL pattern in configuration could not tell you whether a particular deployment answers, which is what the startup probe checks instead. If the API stops answering or changes shape at runtime, a listing request returns 502 rather than an unfiltered list.

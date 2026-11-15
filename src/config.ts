@@ -1,43 +1,23 @@
 import { parseArgs as nodeParseArgs } from "node:util";
+import {
+  DEFAULT_UPSTREAMS,
+  RegistrySpecError,
+  parseRegistrySpec,
+  resolveRegistries,
+  type RegistrySpec,
+  type RegistryType,
+} from "./registry-spec.ts";
 
 export interface Config {
   /** Host address to bind on */
   host: string;
   /** Port to listen on */
   port: number;
-  /** Upstream registry base URLs per package manager */
-  upstreams: {
-    npm: string;
-    pypi: string;
-    rubygems: string;
-    go: string;
-    composer: string;
-    maven: string;
-    gradlePlugins: string;
-  };
   /**
-   * Additional Maven-layout repositories, each mounted at its own top-level path
-   * (`/{name}`). Declared with a repeatable `--maven-repo <name>=<url>`.
-   *
-   * These read publish timestamps from the upstream's `Last-Modified` headers,
-   * since deps.dev only indexes Maven Central.
+   * Every registry the proxy serves, built-in ones included, in mount order.
+   * See ./registry-spec.ts for how they are declared.
    */
-  mavenRepos?: { name: string; upstream: string }[];
-  /** Where the built-in Maven registry reads publish timestamps from */
-  mavenTimestampSource?: 'deps-dev' | 'last-modified';
-  /**
-   * Ivy-layout repositories, each mounted at its own top-level path (`/{name}`).
-   * Declared with a repeatable `--ivy-repo <name>=<url>`.
-   */
-  ivyRepos?: {
-    name: string;
-    upstream: string;
-    /**
-     * Source for the module's revision listing. Without it a dynamic revision
-     * cannot resolve to an allowed revision — see IvyRegistryProxy.
-     */
-    index?: 'artifactory';
-  }[];
+  registries: RegistrySpec[];
   /** Versions published within this many days are excluded from responses */
   delayDays: number;
   /** Path to a single combined malicious DB JSON file */
@@ -112,23 +92,11 @@ const OPTIONS = {
     default: "https://repo.maven.apache.org/maven2",
     description: "Upstream URL for Maven Central",
   },
-  "maven-repo": {
+  registry: {
     type: "string" as const,
     multiple: true as const,
     description:
-      "Additional Maven repository as <name>=<url>, mounted at /<name> (repeatable). Timestamps come from the upstream's Last-Modified header, since deps.dev only indexes Central",
-  },
-  "ivy-repo": {
-    type: "string" as const,
-    multiple: true as const,
-    description:
-      "Ivy-layout repository as <name>=<url>[,index=artifactory], mounted at /<name> (repeatable). Downloads are gated on the revision's ivy.xml; add index=artifactory to also serve filtered revision listings, which is what lets a dynamic revision resolve",
-  },
-  "maven-timestamp-source": {
-    type: "string" as const,
-    default: "deps-dev",
-    description:
-      "Where the built-in Maven registry reads publish timestamps: 'deps-dev' (Central only) or 'last-modified'. Use 'last-modified' when --maven-upstream points somewhere other than Central",
+      "Registry as <type>[:<name>]=<upstream>[,<upstream>...][;<key>=<value>...] (repeatable). Two or more upstreams form a group; upstream settings go in the URL fragment (#index=artifactory, #timestamps=last-modified); registry settings follow ';' (public-url=<url>). Replaces the built-in registry of the same name",
   },
   "gradle-plugins-upstream": {
     type: "string" as const,
@@ -189,123 +157,12 @@ function buildHelp(): string {
   return lines.join("\n");
 }
 
-/** Names already taken by the built-in registries; an extra repo cannot shadow one. */
-const RESERVED_REGISTRY_NAMES = new Set([
-  "npm",
-  "pypi",
-  "rubygems",
-  "go",
-  "composer",
-  "maven",
-  "gradle-plugins",
-]);
-
-/** A mount name has to be a single safe path segment. */
-const REPO_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-
-/**
- * Parse repeated `--<flag> <name>=<url>` values.
- *
- * Exits with a message rather than throwing: a malformed repository definition
- * would otherwise surface as a confusing 404 at request time.
- */
-function parseNamedRepos<T extends { name: string; upstream: string }>(
-  raw: string[],
-  flag: string,
-  /**
-   * Splits any trailing `,<option>=<value>` off the URL. Applied before the URL
-   * is validated, so validation and the trailing-slash trim see the URL itself
-   * and an error message quotes only that.
-   */
-  splitOptions: (repo: { name: string; upstream: string }) => T = (repo) =>
-    repo as T,
-): T[] {
-  const repos: T[] = [];
-  const seen = new Set<string>();
-
-  for (const entry of raw) {
-    const separator = entry.indexOf("=");
-    if (separator <= 0 || separator === entry.length - 1) {
-      console.error(
-        `Error: invalid --${flag} '${entry}' (expected <name>=<url>, e.g. sbt-releases=https://repo.scala-sbt.org/scalasbt/maven-releases)`,
-      );
-      process.exit(1);
-    }
-    const name = entry.slice(0, separator).trim();
-    const split = splitOptions({
-      name,
-      upstream: entry.slice(separator + 1).trim(),
-    });
-    const upstream = split.upstream;
-
-    if (!REPO_NAME_PATTERN.test(name)) {
-      console.error(
-        `Error: invalid --${flag} name '${name}' (expected a lowercase path segment matching ${REPO_NAME_PATTERN})`,
-      );
-      process.exit(1);
-    }
-    if (RESERVED_REGISTRY_NAMES.has(name)) {
-      console.error(
-        `Error: --${flag} name '${name}' is reserved by a built-in registry`,
-      );
-      process.exit(1);
-    }
-    if (seen.has(name)) {
-      console.error(`Error: duplicate --${flag} name '${name}'`);
-      process.exit(1);
-    }
-    try {
-      const parsed = new URL(upstream);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error("must use http or https");
-      }
-    } catch {
-      console.error(
-        `Error: invalid --${flag} url '${upstream}' for '${name}' (expected an absolute http(s) URL)`,
-      );
-      process.exit(1);
-    }
-
-    seen.add(name);
-    repos.push({ ...split, upstream: split.upstream.replace(/\/+$/, "") });
-  }
-
-  return repos;
-}
-
-/** Sources a `--ivy-repo` can read a module's revision listing from. */
-const IVY_INDEX_SOURCES = ["artifactory"] as const;
-
-/**
- * Split a trailing `,index=<source>` off an --ivy-repo URL.
- *
- * The listing is what a resolver picks a dynamic revision from, so where it
- * comes from is stated explicitly rather than guessed from the URL.
- */
-function parseIvyIndexOption(repo: { name: string; upstream: string }): {
-  name: string;
-  upstream: string;
-  index?: (typeof IVY_INDEX_SOURCES)[number];
-} {
-  const match = /^(.*),index=([^,]*)$/.exec(repo.upstream);
-  if (!match) return repo;
-  const source = match[2]!;
-  if (!(IVY_INDEX_SOURCES as readonly string[]).includes(source)) {
-    console.error(
-      `Error: invalid index source '${source}' for --ivy-repo '${repo.name}' ` +
-        `(expected one of: ${IVY_INDEX_SOURCES.join(", ")})`,
-    );
-    process.exit(1);
-  }
-  return {
-    name: repo.name,
-    upstream: match[1]!,
-    index: source as (typeof IVY_INDEX_SOURCES)[number],
-  };
-}
-
 export function loadConfig(argv = process.argv.slice(2)): Config {
-  const { values } = nodeParseArgs({ args: argv, options: OPTIONS });
+  const { values, tokens } = nodeParseArgs({
+    args: argv,
+    options: OPTIONS,
+    tokens: true,
+  });
 
   if (values["help"]) {
     console.log(buildHelp());
@@ -351,50 +208,42 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     process.exit(1);
   }
 
-  const mavenTimestampSource = values["maven-timestamp-source"] as string;
-  if (
-    mavenTimestampSource !== "deps-dev" &&
-    mavenTimestampSource !== "last-modified"
-  ) {
-    console.error(
-      `Error: invalid --maven-timestamp-source '${mavenTimestampSource}' (expected 'deps-dev' or 'last-modified')`,
-    );
-    process.exit(1);
+  // The --<type>-upstream flags have defaults, so only one actually given
+  // counts as setting its registry.
+  const given = new Set<string>(
+    tokens.filter((t) => t.kind === "option").map((t) => t.name),
+  );
+  const upstreamFlags: Partial<
+    Record<Exclude<RegistryType, "ivy">, string>
+  > = {};
+  for (const type of Object.keys(DEFAULT_UPSTREAMS) as Exclude<
+    RegistryType,
+    "ivy"
+  >[]) {
+    const flag = `${type}-upstream`;
+    if (given.has(flag)) {
+      upstreamFlags[type] = values[flag as keyof typeof values] as string;
+    }
   }
 
-  const mavenRepos = parseNamedRepos(
-    (values["maven-repo"] as string[] | undefined) ?? [],
-    "maven-repo",
-  );
-  const ivyRepos = parseNamedRepos(
-    (values["ivy-repo"] as string[] | undefined) ?? [],
-    "ivy-repo",
-    parseIvyIndexOption,
-  );
-
-  const clash = mavenRepos.find((m) => ivyRepos.some((i) => i.name === m.name));
-  if (clash) {
-    console.error(
-      `Error: '${clash.name}' is declared as both a --maven-repo and an --ivy-repo`,
+  let registries: RegistrySpec[];
+  try {
+    registries = resolveRegistries(
+      ((values["registry"] as string[] | undefined) ?? []).map(
+        parseRegistrySpec,
+      ),
+      upstreamFlags,
     );
+  } catch (err) {
+    if (!(err instanceof RegistrySpecError)) throw err;
+    console.error(`Error: ${err.message}`);
     process.exit(1);
   }
 
   return {
     host: values["host"] as string,
     port: parseInt(values["port"] as string, 10),
-    upstreams: {
-      npm: values["npm-upstream"] as string,
-      pypi: values["pypi-upstream"] as string,
-      rubygems: values["rubygems-upstream"] as string,
-      go: values["go-upstream"] as string,
-      composer: values["composer-upstream"] as string,
-      maven: values["maven-upstream"] as string,
-      gradlePlugins: values["gradle-plugins-upstream"] as string,
-    },
-    mavenRepos,
-    mavenTimestampSource,
-    ivyRepos,
+    registries,
     delayDays: parseFloat(values["delay-days"] as string),
     maliciousDbPath: values["malicious-db-path"] as string,
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,

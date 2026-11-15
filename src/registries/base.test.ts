@@ -87,6 +87,27 @@ describe("RegistryProxy – metadata routing", () => {
     expect(res.status).toHaveBeenCalledWith(302);
   });
 
+  it("forwards Location under the public URL, without the /{name} prefix", async () => {
+    const publicProxy = new MetadataTestProxy({
+      upstream: "https://upstream.example.com",
+      delayMs: 0,
+      maliciousDbPath: "/dev/null",
+      publicUrl: "https://meta.example.com",
+    });
+    mockedGet.mockResolvedValue({
+      status: 301,
+      data: "",
+      headers: { location: "https://upstream.example.com/pkg/redirected?q=1" },
+    });
+    const res = makeRes();
+    await publicProxy.handleRequest(makeReq("/pkg"), res);
+
+    expect(res.set).toHaveBeenCalledWith(
+      "location",
+      "https://meta.example.com/pkg/redirected?q=1",
+    );
+  });
+
   it("forwards Location header as-is when domain differs from upstream", async () => {
     mockedGet.mockResolvedValue({
       status: 301,

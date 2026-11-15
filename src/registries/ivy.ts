@@ -21,7 +21,14 @@ const MAX_REDIRECTS = 3;
 const PROBE_CONCURRENCY = 8;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 10_000;
-const probeCache = new TtlCache<Date | null>(CACHE_TTL_MS, CACHE_MAX_ENTRIES);
+/** What a HEAD of a revision's ivy.xml said. */
+interface IvyXmlHead {
+  /** Whether the upstream has the revision (its ivy.xml answered 200). */
+  found: boolean;
+  /** The ivy.xml's `Last-Modified`, when found and readable. */
+  published: Date | null;
+}
+const probeCache = new TtlCache<IvyXmlHead>(CACHE_TTL_MS, CACHE_MAX_ENTRIES);
 const listingCache = new TtlCache<string[]>(CACHE_TTL_MS, CACHE_MAX_ENTRIES);
 
 /** How many children are inspected to tell a revision directory from any other. */
@@ -33,12 +40,25 @@ export function __resetIvyCachesForTesting() {
   listingCache.clear();
 }
 
-export interface IvyRegistryConfig extends RegistryConfig {
+/** One upstream of an Ivy-layout registry. */
+export interface IvyUpstream {
+  url: string;
   /**
-   * Structured source for a module's revision listing, resolved at startup when
-   * `--ivy-repo …,index=artifactory` is configured. Unset means dynamic
+   * Structured source for a module's revision listing, resolved at startup
+   * when the upstream is given `#index=artifactory`. Unset means its dynamic
    * revisions are not filtered — see IvyRegistryProxy.
    */
+  endpoint?: ArtifactoryEndpoint;
+}
+
+export interface IvyRegistryConfig extends RegistryConfig {
+  /**
+   * The upstreams, searched in order. More than one makes a group: revision
+   * listings are merged across them and each file is served by the first
+   * upstream that holds its revision. Unset means `upstream` with `endpoint`.
+   */
+  upstreams?: IvyUpstream[];
+  /** The listing source of `upstream`, when `upstreams` is unset. */
   endpoint?: ArtifactoryEndpoint;
 }
 
@@ -92,8 +112,12 @@ export class IvyRegistryProxy extends RegistryProxy {
    * `setRouting()`, which runs before a subclass's own initialisers, so a field
    * would still be undefined when the routes are registered.
    */
-  private get endpoint(): ArtifactoryEndpoint | null {
-    return (this.config as IvyRegistryConfig).endpoint ?? null;
+  private get upstreams(): IvyUpstream[] {
+    const config = this.config as IvyRegistryConfig;
+    if (config.upstreams && config.upstreams.length > 0) return config.upstreams;
+    return [
+      { url: config.upstream.replace(/\/$/, ''), endpoint: config.endpoint },
+    ];
   }
 
   protected override get dbKey(): string {
@@ -113,7 +137,8 @@ export class IvyRegistryProxy extends RegistryProxy {
 
     this.addCustomRoute({
       condition: (req) =>
-        this.endpoint !== null && isRevisionListingPath(req.path),
+        this.upstreams.some((u) => u.endpoint !== undefined) &&
+        isRevisionListingPath(req.path),
       handle: (req, res) => this.respondRevisionListing(req, res),
     });
   }
@@ -134,38 +159,81 @@ export class IvyRegistryProxy extends RegistryProxy {
     req: Request,
     res: Response,
   ): Promise<void> {
-    const endpoint = this.endpoint!;
     const modulePath = req.path.replace(/\/+$/, '');
-    const children = await this.listChildren(endpoint, modulePath);
-    if (children === null) {
-      // The listing is what the resolver picks from; serving an unfiltered or
-      // partial one would defeat the cooldown, so refuse instead.
+    const indexed = this.upstreams.filter(
+      (u): u is IvyUpstream & { endpoint: ArtifactoryEndpoint } =>
+        u.endpoint !== undefined,
+    );
+    const listings = await Promise.all(
+      indexed.map((u) => this.listRevisions(u, modulePath)),
+    );
+
+    // In a group an upstream that cannot list the module contributes nothing:
+    // the storage API answers a module it does not hold the same way as a
+    // failure, and offering fewer revisions never lets a new one through. With
+    // nothing listed anywhere, though, there is no listing to serve.
+    if (listings.every((l) => l === 'unlisted')) {
       this.refuseListing(res, modulePath, 'could not be listed');
       return;
     }
+    if (listings.includes('undatable')) {
+      this.refuseListing(
+        res,
+        modulePath,
+        'holds revisions whose ivy.xml could not be read, so none of them ' +
+          'can be shown to be past the cooldown',
+      );
+      return;
+    }
 
-    const dated = await this.dateRevisions(modulePath, children);
-    if (dated.length === 0) {
-      if (await this.holdsRevisions(endpoint, modulePath, children)) {
-        this.refuseListing(
-          res,
-          modulePath,
-          'holds revisions whose ivy.xml could not be read, so none of them ' +
-            'can be shown to be past the cooldown',
-        );
-        return;
+    const offered: string[] = [];
+    const seen = new Set<string>();
+    let anyRevisions = false;
+    for (const listing of listings) {
+      if (typeof listing === 'string') continue;
+      anyRevisions = true;
+      for (const revision of listing) {
+        if (seen.has(revision)) continue;
+        seen.add(revision);
+        offered.push(revision);
       }
+    }
+    if (!anyRevisions) {
       // Not a revision directory — it has no revisions to filter, so it is none
       // of this route's business.
       await this.handlePassthrough(req, res);
       return;
     }
+    res.status(200).type('text/html').send(renderListing(offered));
+  }
 
+  /**
+   * One upstream's revisions of a module that are past the cooldown, in its
+   * listing order.
+   *
+   * A path's shape cannot tell a directory of revisions from any other
+   * directory: `/ch.epfl.scala/sbt-bloop/` holds `scala_2.12`, and `…/1.5.6/`
+   * holds `ivys` and `jars`. Filtering either as if its children were revisions
+   * would hide them all, so the children decide. A child that dates is a
+   * revision; if none date, the storage API is asked whether any child holds an
+   * artifact-type directory — which says the children *are* revisions whose
+   * `ivy.xml` cannot be read (`undatable`), rather than no revisions at all
+   * (`not-revisions`).
+   */
+  private async listRevisions(
+    upstream: IvyUpstream & { endpoint: ArtifactoryEndpoint },
+    modulePath: string,
+  ): Promise<string[] | 'unlisted' | 'undatable' | 'not-revisions'> {
+    const children = await this.listChildren(upstream, modulePath);
+    if (children === null) return 'unlisted';
+    const dated = await this.dateRevisions(upstream, modulePath, children);
+    if (dated.length === 0) {
+      return (await this.holdsRevisions(upstream, modulePath, children))
+        ? 'undatable'
+        : 'not-revisions';
+    }
     const allowed = new Set(this.filterVersions(dated).map((v) => v.version));
-    res
-      .status(200)
-      .type('text/html')
-      .send(renderListing(children.filter((c) => allowed.has(c))));
+    return children.filter((c) => allowed.has(c));
   }
 
   private refuseListing(res: Response, path: string, why: string): void {
@@ -184,13 +252,13 @@ export class IvyRegistryProxy extends RegistryProxy {
    * runs only when no child could be dated.
    */
   private async holdsRevisions(
-    endpoint: ArtifactoryEndpoint,
+    upstream: IvyUpstream & { endpoint: ArtifactoryEndpoint },
     modulePath: string,
     children: string[],
   ): Promise<boolean> {
     for (const child of children.slice(0, SHAPE_SAMPLE)) {
       const grandchildren = await this.listChildren(
-        endpoint,
+        upstream,
         `${modulePath}/${child}`,
       );
       if (grandchildren?.some(isArtifactTypeDirectory)) return true;
@@ -200,13 +268,13 @@ export class IvyRegistryProxy extends RegistryProxy {
 
   /** The child folders of a path, cached for CACHE_TTL_MS. */
   private async listChildren(
-    endpoint: ArtifactoryEndpoint,
+    upstream: IvyUpstream & { endpoint: ArtifactoryEndpoint },
     path: string,
   ): Promise<string[] | null> {
-    const key = `${this.name}${path}`;
+    const key = `${upstream.url}${path}`;
     const cached = listingCache.get(key);
     if (cached !== undefined) return cached;
-    const children = await listFolders(endpoint, path);
+    const children = await listFolders(upstream.endpoint, path);
     if (children === null) return null;
     listingCache.set(key, children);
     return children;
@@ -219,6 +287,7 @@ export class IvyRegistryProxy extends RegistryProxy {
    * revision at all, or its age is unknown, and neither may be offered.
    */
   private async dateRevisions(
+    upstream: IvyUpstream,
     modulePath: string,
     candidates: string[],
   ): Promise<VersionMetadata[]> {
@@ -229,7 +298,11 @@ export class IvyRegistryProxy extends RegistryProxy {
       Array.from({ length: workers }, async () => {
         while (next < candidates.length) {
           const revision = candidates[next++]!;
-          const published = await this.revisionPublished(modulePath, revision);
+          const published = await this.revisionPublished(
+            upstream,
+            modulePath,
+            revision,
+          );
           if (!published) continue;
           dated.push({
             packageName: packageNameFromPath(modulePath),
@@ -242,19 +315,36 @@ export class IvyRegistryProxy extends RegistryProxy {
     return dated;
   }
 
+  /**
+   * Date a download from the first upstream holding its revision, which is
+   * the one it is then served from.
+   */
   private async getDownloadVersionMetadata(
     req: Request,
   ): Promise<VersionMetadata | null> {
     const parsed = parseIvyDownloadPath(req.path);
     if (!parsed) return null;
     const { modulePath, revision } = parsed;
-    const published = await this.revisionPublished(modulePath, revision);
-    if (!published) return null;
-    return {
-      packageName: packageNameFromPath(modulePath),
-      version: revision,
-      published,
-    };
+    const upstreams = this.upstreams;
+    for (const upstream of upstreams) {
+      const { found, published } = await this.headIvyXml(
+        upstream,
+        modulePath,
+        revision,
+      );
+      if (!found) continue;
+      // This upstream holds the revision and serves it, so an unreadable date
+      // blocks it here rather than passing it to another upstream's copy.
+      if (!published) return null;
+      return {
+        packageName: packageNameFromPath(modulePath),
+        version: revision,
+        published,
+        // A single upstream is the registry's own, reached the usual way.
+        ...(upstreams.length > 1 && { upstreamUrl: `${upstream.url}${req.path}` }),
+      };
+    }
+    return null;
   }
 
   /**
@@ -263,34 +353,36 @@ export class IvyRegistryProxy extends RegistryProxy {
    * a revision the listing offers is a revision the gate will pass.
    */
   private async revisionPublished(
+    upstream: IvyUpstream,
     modulePath: string,
     revision: string,
   ): Promise<Date | null> {
-    const key = `${this.name}${modulePath}/${revision}`;
-    const cached = probeCache.get(key);
-    if (cached !== undefined) return cached;
-    const published = await this.headIvyXml(modulePath, revision);
-    probeCache.set(key, published);
-    return published;
+    return (await this.headIvyXml(upstream, modulePath, revision)).published;
   }
 
+  /** HEAD a revision's `ivys/ivy.xml`, cached for CACHE_TTL_MS. */
   private async headIvyXml(
+    upstream: IvyUpstream,
     modulePath: string,
     revision: string,
-  ): Promise<Date | null> {
-    const base = this.config.upstream.replace(/\/$/, '');
+  ): Promise<IvyXmlHead> {
+    const url = `${upstream.url}${modulePath}/${revision}/ivys/ivy.xml`;
+    const cached = probeCache.get(url);
+    if (cached !== undefined) return cached;
     // Follow redirects: repo.scala-sbt.org and repo.typesafe.com both 302 to
     // the Artifactory instance that actually holds the file.
-    const res = await axios.head(
-      `${base}${modulePath}/${revision}/ivys/ivy.xml`,
-      { validateStatus: () => true, maxRedirects: MAX_REDIRECTS },
-    );
-    if (res.status !== 200) return null;
+    const res = await axios.head(url, {
+      validateStatus: () => true,
+      maxRedirects: MAX_REDIRECTS,
+    });
+    const head: IvyXmlHead = { found: res.status === 200, published: null };
     const lastModified = res.headers['last-modified'];
-    if (typeof lastModified !== 'string') return null;
-    const published = new Date(lastModified);
-    if (Number.isNaN(published.getTime())) return null;
-    return published;
+    if (head.found && typeof lastModified === 'string') {
+      const published = new Date(lastModified);
+      if (!Number.isNaN(published.getTime())) head.published = published;
+    }
+    probeCache.set(url, head);
+    return head;
   }
 }
 

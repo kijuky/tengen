@@ -432,3 +432,127 @@ describe("IvyRegistryProxy – listing document", () => {
     expect(html).not.toContain("%2B");
   });
 });
+
+describe("IvyRegistryProxy – groups", () => {
+  const A = "https://a.example.com/ivy";
+  const B = "https://b.example.com/ivy";
+  const ENDPOINT_A = { apiBase: "https://a.example.com/api", repo: "a", prefix: "" };
+  const ENDPOINT_B = { apiBase: "https://b.example.com/api", repo: "b", prefix: "" };
+  const FILE = "/1.0.0/ivys/ivy.xml";
+
+  function group(withIndex: boolean) {
+    return new IvyRegistryProxy({
+      upstream: A,
+      upstreams: [
+        { url: A, endpoint: withIndex ? ENDPOINT_A : undefined },
+        { url: B, endpoint: withIndex ? ENDPOINT_B : undefined },
+      ],
+      delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
+    });
+  }
+
+  /** ivy.xml dates keyed by full URL; anything else is a 404. */
+  function mockDates(dates: Record<string, string>) {
+    vi.mocked(axios.head).mockImplementation(async (url: string) => {
+      const date = dates[url];
+      if (!date) return { status: 404, headers: {} } as any;
+      return {
+        status: 200,
+        headers: { "last-modified": new Date(date).toUTCString() },
+      } as any;
+    });
+  }
+
+  /** Storage API children per endpoint; a missing one answers 404. */
+  function mockListings(listings: Record<string, string[]>) {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const children = Object.entries(listings).find(([api]) =>
+        url.startsWith(api),
+      )?.[1];
+      if (!children) return { status: 404, data: {}, headers: {} } as any;
+      return {
+        status: 200,
+        headers: {},
+        data: { children: children.map((c) => ({ uri: `/${c}`, folder: true })) },
+      } as any;
+    });
+  }
+
+  it("serves a file from the first upstream holding its revision", async () => {
+    mockDates({ [`${B}${MODULE}${FILE}`]: "2024-01-01T00:00:00Z" });
+
+    const res = makeRes();
+    await group(false).handleRequest(makeReq(`${MODULE}${FILE}`) as any, res as any);
+
+    expect(res.redirect).toHaveBeenCalledWith(307, `${B}${MODULE}${FILE}`);
+  });
+
+  it("does not fall through when the first holder's revision is too new", async () => {
+    mockDates({
+      [`${A}${MODULE}${FILE}`]: "2024-02-01T00:00:00Z",
+      [`${B}${MODULE}${FILE}`]: "2024-01-01T00:00:00Z",
+    });
+
+    const res = makeRes();
+    await group(false).handleRequest(makeReq(`${MODULE}${FILE}`) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("does not fall through when the first holder's date cannot be read", async () => {
+    mockDates({ [`${B}${MODULE}${FILE}`]: "2024-01-01T00:00:00Z" });
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) =>
+      url === `${A}${MODULE}${FILE}`
+        ? ({ status: 200, headers: {} } as any)
+        : answer(url, ...rest),
+    );
+
+    const res = makeRes();
+    await group(false).handleRequest(makeReq(`${MODULE}${FILE}`) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("merges the revision listings of the indexed upstreams", async () => {
+    mockListings({
+      [`${ENDPOINT_A.apiBase}/api/storage/a${MODULE}`]: ["1.0.0", "2.0.0"],
+      [`${ENDPOINT_B.apiBase}/api/storage/b${MODULE}`]: ["2.0.0", "3.0.0", "4.0.0"],
+    });
+    mockDates({
+      [`${A}${MODULE}/1.0.0/ivys/ivy.xml`]: "2024-01-01T00:00:00Z",
+      [`${A}${MODULE}/2.0.0/ivys/ivy.xml`]: "2024-01-02T00:00:00Z",
+      [`${B}${MODULE}/2.0.0/ivys/ivy.xml`]: "2024-01-02T00:00:00Z",
+      [`${B}${MODULE}/3.0.0/ivys/ivy.xml`]: "2024-01-03T00:00:00Z",
+      [`${B}${MODULE}/4.0.0/ivys/ivy.xml`]: "2024-02-01T00:00:00Z",
+    });
+
+    const res = makeRes();
+    await group(true).handleRequest(makeReq(`${MODULE}/`) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(listingEntries(res)).toEqual(["1.0.0", "2.0.0", "3.0.0"]);
+  });
+
+  it("lists what the other upstreams have when one cannot list the module", async () => {
+    mockListings({ [`${ENDPOINT_B.apiBase}/api/storage/b${MODULE}`]: ["3.0.0"] });
+    mockDates({ [`${B}${MODULE}/3.0.0/ivys/ivy.xml`]: "2024-01-03T00:00:00Z" });
+
+    const res = makeRes();
+    await group(true).handleRequest(makeReq(`${MODULE}/`) as any, res as any);
+
+    expect(listingEntries(res)).toEqual(["3.0.0"]);
+  });
+
+  it("refuses the listing when no upstream can list the module", async () => {
+    mockListings({});
+
+    const res = makeRes();
+    await group(true).handleRequest(makeReq(`${MODULE}/`) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+  });
+});

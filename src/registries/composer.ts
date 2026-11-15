@@ -29,7 +29,7 @@ interface ComposerRootResponse {
 }
 
 export class ComposerRegistryProxy extends RegistryProxy {
-  readonly name = 'composer';
+  readonly name: string = this.config.name ?? 'composer';
 
   public setRouting() {
     this.addCustomRoute({

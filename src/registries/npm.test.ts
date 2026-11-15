@@ -461,6 +461,24 @@ describe('NpmRegistryProxy – tarball URL rewriting', () => {
       'https://tengen.example.com/npm/@babel/core/-/core-7.0.0.tgz',
     );
   });
+
+  it.each(['proxied', 'direct'] as const)(
+    'rewrites dist.tarball to the public URL without the /npm prefix in %s mode',
+    async (upstreamAccess) => {
+      const proxy = new NpmRegistryProxy({
+        upstream: 'https://registry.npmjs.org',
+        delayMs: DELAY_MS,
+        maliciousDbPath: '/dev/null',
+        upstreamAccess,
+        baseUrl: 'https://tengen.example.com',
+        publicUrl: 'https://npm.example.com',
+      });
+      const result = await fetchPackument(proxy);
+      expect(tarballOf(result)).toBe(
+        'https://npm.example.com/lodash/-/lodash-4.17.21.tgz',
+      );
+    },
+  );
 });
 
 describe('NpmRegistryProxy – malicious filtering', () => {

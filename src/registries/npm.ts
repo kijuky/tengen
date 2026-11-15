@@ -16,7 +16,7 @@ interface NpmPackageMetadata {
 }
 
 export class NpmRegistryProxy extends RegistryProxy {
-  readonly name = 'npm';
+  readonly name: string = this.config.name ?? 'npm';
 
   public setRouting() {
     this.addMetadataRoute<NpmPackageMetadata>({
@@ -24,18 +24,12 @@ export class NpmRegistryProxy extends RegistryProxy {
       getVersions: getVersionMetadata,
       filterMetadata: async (metadata, allowedVersions) => {
         const filtered = await filterMetadata(metadata, allowedVersions);
-        // In "proxied" mode the upstream is unreachable, so repoint each version's
-        // tarball at this proxy to fetch artifacts through it. The npm CLI
-        // rewrites the host itself, but yarn/pnpm and other clients use
-        // dist.tarball verbatim and would fail against the un-reachable
-        // upstream. Requires --base-url; without it the upstream tarball URL is
-        // left intact. In "direct" mode the upstream is reachable, so the URL
-        // is left as-is.
-        const tarballBaseUrl =
-          this.config.upstreamAccess === 'proxied'
-            ? (this.config.baseUrl ?? null)
-            : null;
-        rewriteTarballUrls(filtered, tarballBaseUrl, this.name);
+        // Repoint each version's tarball at this proxy when clients should
+        // fetch through it: under the public URL, or in "proxied" mode where
+        // the upstream is unreachable. The npm CLI rewrites the host itself,
+        // but yarn/pnpm and other clients use dist.tarball verbatim. Otherwise
+        // the upstream tarball URL is left as-is.
+        rewriteTarballUrls(filtered, this.artifactBaseUrl);
         return filtered;
       },
     });
@@ -140,25 +134,25 @@ async function filterMetadata(
  * of the upstream:
  *
  *   https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz
- *   → {baseUrl}/npm/lodash/-/lodash-4.17.21.tgz
+ *   → {artifactBaseUrl}/lodash/-/lodash-4.17.21.tgz
  *
- * The result must be absolute: npm treats a relative `dist.tarball` as a local
- * file path, so a root-absolute path would not work. No-ops when no base URL is
- * given (leaving the upstream URL intact — the caller passes null outside
- * proxied mode), or for any tarball value that isn't a parseable absolute URL.
+ * `artifactBaseUrl` is the public URL, or `{baseUrl}/npm`. The result must be
+ * absolute: npm treats a relative `dist.tarball` as a local file path, so a
+ * root-absolute path would not work. No-ops when no base is given (leaving the
+ * upstream URL intact), or for any tarball value that isn't a parseable
+ * absolute URL.
  */
 function rewriteTarballUrls(
   metadata: NpmPackageMetadata,
-  baseUrl: string | null,
-  registryName: string,
+  artifactBaseUrl: string | null,
 ): void {
-  if (!baseUrl) return;
+  if (!artifactBaseUrl) return;
   for (const version of Object.values(metadata.versions)) {
     const tarball = version?.dist?.tarball;
     if (typeof tarball !== 'string') continue;
     try {
       const u = new URL(tarball);
-      version.dist!.tarball = `${baseUrl}/${registryName}${u.pathname}${u.search}`;
+      version.dist!.tarball = `${artifactBaseUrl}${u.pathname}${u.search}`;
     } catch {
       // Not an absolute URL — leave it untouched.
     }
