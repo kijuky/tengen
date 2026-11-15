@@ -61,6 +61,12 @@ export interface Config {
    * mode (the loader errors without it); unused in `direct` mode.
    */
   baseUrl?: string;
+  /**
+   * Directory to keep downloaded artifacts in. Unset disables the cache. A
+   * stored artifact is judged against the malicious DB on every request and
+   * removed once it is listed.
+   */
+  cacheDir?: string;
 }
 
 const OPTIONS = {
@@ -156,6 +162,12 @@ const OPTIONS = {
     default: "",
     description:
       "Absolute base URL of this proxy (e.g. https://tengen.example.com); used to rewrite artifact URLs like npm dist.tarball so clients fetch through the proxy. Required when using --upstream-access proxied",
+  },
+  "cache-dir": {
+    type: "string" as const,
+    default: "",
+    description:
+      "Directory to keep downloaded artifacts in (disabled when empty). Cached artifacts are still checked against the malicious DB on every request and removed once listed",
   },
   help: {
     type: "boolean" as const,
@@ -388,5 +400,6 @@ export function loadConfig(argv = process.argv.slice(2)): Config {
     allowlistDbPath: (values["allowlist-db-path"] as string) || undefined,
     upstreamAccess,
     baseUrl,
+    cacheDir: (values["cache-dir"] as string).trim() || undefined,
   };
 }

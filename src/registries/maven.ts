@@ -60,6 +60,11 @@ export class MavenRegistryProxy extends RegistryProxy {
     this.name = config.name ?? 'maven';
   }
 
+  /** A `-SNAPSHOT` path can be redeployed with new contents. */
+  protected override isCacheable(version: VersionMetadata): boolean {
+    return !version.version.endsWith('-SNAPSHOT');
+  }
+
   /**
    * deps.dev only indexes Maven Central, so a repository other than Central has
    * to read timestamps from its own `Last-Modified` headers. The two sources are

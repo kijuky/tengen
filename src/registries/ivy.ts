@@ -100,6 +100,11 @@ export class IvyRegistryProxy extends RegistryProxy {
     return 'maven';
   }
 
+  /** A `-SNAPSHOT` revision can be republished with new contents. */
+  protected override isCacheable(version: VersionMetadata): boolean {
+    return !version.version.endsWith('-SNAPSHOT');
+  }
+
   protected setRouting() {
     this.addDownloadRoute({
       condition: (req) => isIvyDownloadPath(req.path),
