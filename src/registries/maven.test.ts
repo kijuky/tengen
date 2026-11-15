@@ -1059,6 +1059,76 @@ describe("MavenRegistryProxy – groups", () => {
     expect((await metadata()).status).toHaveBeenCalledWith(503);
   });
 
+  it("answers from the other upstreams when one cannot be reached", async () => {
+    mockUpstreams({ [B]: ["2.0.0"] }, { [pom(B, "2.0.0")]: BEFORE_CUTOFF });
+    const answer = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url: string, ...rest) => {
+      if (url.startsWith(A)) throw new Error("read ECONNRESET");
+      return answer(url, ...rest);
+    });
+
+    const res = await metadata();
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(versionsIn(res)).toEqual(["2.0.0"]);
+  });
+
+  it("answers 502 when every upstream fails to be reached", async () => {
+    vi.mocked(axios.get).mockRejectedValue(new Error("read ECONNRESET"));
+
+    expect((await metadata()).status).toHaveBeenCalledWith(502);
+  });
+
+  it("serves a download from a later upstream when an earlier one cannot be reached", async () => {
+    const path = "/com/example/mylib/2.0.0/mylib-2.0.0.jar";
+    mockUpstreams({}, { [`${B}${path}`]: BEFORE_CUTOFF });
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) => {
+      if (url.startsWith(A)) throw new Error("read ECONNRESET");
+      return answer(url, ...rest);
+    });
+
+    const res = makeRes();
+    await group().handleRequest(makeReq(path) as any, res as any);
+
+    expect(res.redirect).toHaveBeenCalledWith(307, `${B}${path}`);
+  });
+
+  it("does not date a version in a later upstream that an earlier one listed", async () => {
+    mockUpstreams(
+      { [A]: ["1.0.0", "1.1.0"], [B]: ["1.1.0", "2.0.0"] },
+      {
+        [pom(A, "1.0.0")]: BEFORE_CUTOFF,
+        [pom(A, "1.1.0")]: BEFORE_CUTOFF,
+        [pom(B, "2.0.0")]: BEFORE_CUTOFF,
+      },
+    );
+
+    const res = await metadata();
+
+    expect(versionsIn(res)).toEqual(["1.0.0", "1.1.0", "2.0.0"]);
+    const heads = vi.mocked(axios.head).mock.calls.map(([url]) => url);
+    expect(heads).not.toContain(pom(B, "1.1.0"));
+    expect(heads).toContain(pom(B, "2.0.0"));
+  });
+
+  it("leaves out a version whose probe fails, and still answers", async () => {
+    mockUpstreams(
+      { [A]: ["1.0.0", "1.1.0"], [B]: null },
+      { [pom(A, "1.0.0")]: BEFORE_CUTOFF },
+    );
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) => {
+      if (url === pom(A, "1.1.0")) throw new Error("AggregateError");
+      return answer(url, ...rest);
+    });
+
+    const res = await metadata();
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(versionsIn(res)).toEqual(["1.0.0"]);
+  });
+
   it("checksums the merged document", async () => {
     mockUpstreams(
       { [A]: ["1.0.0"], [B]: ["2.0.0"] },

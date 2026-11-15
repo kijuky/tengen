@@ -164,8 +164,17 @@ export class IvyRegistryProxy extends RegistryProxy {
       (u): u is IvyUpstream & { endpoint: ArtifactoryEndpoint } =>
         u.endpoint !== undefined,
     );
+    // An upstream that cannot be reached contributes nothing, like one that
+    // cannot list the module.
     const listings = await Promise.all(
-      indexed.map((u) => this.listRevisions(u, modulePath)),
+      indexed.map((u) =>
+        this.listRevisions(u, modulePath).catch((err) => {
+          console.error(
+            `[${this.name}] listing ${u.url}${modulePath} failed: ${String(err)}`,
+          );
+          return 'unlisted' as const;
+        }),
+      ),
     );
 
     // In a group an upstream that cannot list the module contributes nothing:
@@ -327,11 +336,19 @@ export class IvyRegistryProxy extends RegistryProxy {
     const { modulePath, revision } = parsed;
     const upstreams = this.upstreams;
     for (const upstream of upstreams) {
-      const { found, published } = await this.headIvyXml(
-        upstream,
-        modulePath,
-        revision,
-      );
+      let head: IvyXmlHead;
+      try {
+        head = await this.headIvyXml(upstream, modulePath, revision);
+      } catch (err) {
+        // In a group an unreachable upstream is passed over like one without
+        // the revision; a single upstream has nowhere else to go.
+        if (upstreams.length === 1) throw err;
+        console.error(
+          `[${this.name}] HEAD ${upstream.url}${modulePath}/${revision} failed: ${String(err)}`,
+        );
+        continue;
+      }
+      const { found, published } = head;
       if (!found) continue;
       // This upstream holds the revision and serves it, so an unreadable date
       // blocks it here rather than passing it to another upstream's copy.

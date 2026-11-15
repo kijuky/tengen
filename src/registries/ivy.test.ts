@@ -547,6 +547,35 @@ describe("IvyRegistryProxy – groups", () => {
     expect(listingEntries(res)).toEqual(["3.0.0"]);
   });
 
+  it("lists what the other upstreams have when one cannot be reached", async () => {
+    mockListings({ [`${ENDPOINT_B.apiBase}/api/storage/b${MODULE}`]: ["3.0.0"] });
+    const answer = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url: string, ...rest) => {
+      if (url.startsWith(ENDPOINT_A.apiBase)) throw new Error("read ECONNRESET");
+      return answer(url, ...rest);
+    });
+    mockDates({ [`${B}${MODULE}/3.0.0/ivys/ivy.xml`]: "2024-01-03T00:00:00Z" });
+
+    const res = makeRes();
+    await group(true).handleRequest(makeReq(`${MODULE}/`) as any, res as any);
+
+    expect(listingEntries(res)).toEqual(["3.0.0"]);
+  });
+
+  it("serves a file from a later upstream when an earlier one cannot be reached", async () => {
+    mockDates({ [`${B}${MODULE}${FILE}`]: "2024-01-01T00:00:00Z" });
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) => {
+      if (url.startsWith(A)) throw new Error("read ECONNRESET");
+      return answer(url, ...rest);
+    });
+
+    const res = makeRes();
+    await group(false).handleRequest(makeReq(`${MODULE}${FILE}`) as any, res as any);
+
+    expect(res.redirect).toHaveBeenCalledWith(307, `${B}${MODULE}${FILE}`);
+  });
+
   it("refuses the listing when no upstream can list the module", async () => {
     mockListings({});
 

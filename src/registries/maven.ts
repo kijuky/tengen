@@ -145,8 +145,36 @@ export class MavenRegistryProxy extends RegistryProxy {
    */
   private async respondMetadata(req: Request, res: Response): Promise<void> {
     const xmlPath = getXmlPath(req.path);
+    const upstreams = this.upstreams;
+    const documents = await Promise.all(
+      upstreams.map((upstream) => this.fetchMetadataDocument(upstream, xmlPath)),
+    );
+
+    // A version belongs to the first upstream listing it (see mergeMetadata),
+    // so a later upstream's date for it would never be used. Not dating those
+    // spares a later upstream that mirrors an earlier one — sbt-maven-releases
+    // answers Central's metadata — a HEAD per version.
+    const listedBefore: Set<string>[] = [];
+    const listed = new Set<string>();
+    for (const document of documents) {
+      listedBefore.push(new Set(listed));
+      if (document.status !== 200) continue;
+      for (const version of parseVersionsFromXml(document.data)) {
+        listed.add(version);
+      }
+    }
+
     const results = await Promise.all(
-      this.upstreams.map((upstream) => this.resolveMetadata(upstream, xmlPath)),
+      documents.map((response, i) =>
+        response.status === 200
+          ? this.judgeMetadata(
+              upstreams[i]!,
+              response.data,
+              xmlPath,
+              listedBefore[i]!,
+            )
+          : { response },
+      ),
     );
     const found = results.filter((r): r is ResolvedMetadata => 'xml' in r);
     if (found.length === 0) {
@@ -167,15 +195,54 @@ export class MavenRegistryProxy extends RegistryProxy {
     this.respondWithMetadata(res, this.mergeMetadata(found), req);
   }
 
-  private async resolveMetadata(
+  /**
+   * One upstream's maven-metadata.xml, or the response it failed with.
+   *
+   * A transport failure — a reset connection, a truncated body — becomes a
+   * 502 for that upstream alone, so the others still answer: one unreachable
+   * member must not take the whole group down.
+   */
+  private async fetchMetadataDocument(
     upstream: MavenUpstream,
     xmlPath: string,
+  ): Promise<AxiosResponse<string>> {
+    try {
+      return await this.fetchUpstreamXml(upstream, xmlPath);
+    } catch (err) {
+      console.error(
+        `[${this.name}] ${upstream.url}${xmlPath} failed: ${String(err)}`,
+      );
+      return badGateway(`${upstream.url}${xmlPath}: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Date and filter one upstream's document, leaving out the versions an
+   * earlier upstream listed. A failure while dating is that upstream's alone,
+   * as with fetching.
+   */
+  private async judgeMetadata(
+    upstream: MavenUpstream,
+    xml: string,
+    xmlPath: string,
+    listedBefore: Set<string>,
   ): Promise<ResolvedMetadata | { response: AxiosResponse<string> }> {
-    const response = await this.fetchUpstreamXml(upstream, xmlPath);
-    if (response.status !== 200) return { response };
-    const xml = response.data;
-    const versions = await this.fetchVersions(upstream, xml, xmlPath);
-    return { xml, allowed: this.filterVersions(versions) };
+    try {
+      const versions = await this.fetchVersions(
+        upstream,
+        xml,
+        xmlPath,
+        listedBefore,
+      );
+      return { xml, allowed: this.filterVersions(versions) };
+    } catch (err) {
+      console.error(
+        `[${this.name}] dating ${upstream.url}${xmlPath} failed: ${String(err)}`,
+      );
+      return {
+        response: badGateway(`${upstream.url}${xmlPath}: ${String(err)}`),
+      };
+    }
   }
 
   /**
@@ -254,7 +321,16 @@ export class MavenRegistryProxy extends RegistryProxy {
     }
     for (const upstream of upstreams) {
       const url = `${upstream.url}${req.path}`;
-      if (!(await this.head(url)).found) continue;
+      // An upstream that cannot be reached is passed over like one without
+      // the file, so the rest of the group still answers.
+      let found: boolean;
+      try {
+        found = (await this.head(url)).found;
+      } catch (err) {
+        console.error(`[${this.name}] HEAD ${url} failed: ${String(err)}`);
+        continue;
+      }
+      if (!found) continue;
       const meta = await this.dateDownload(upstream, req.path, parsed);
       return meta ? { ...meta, upstreamUrl: url } : null;
     }
@@ -346,10 +422,16 @@ export class MavenRegistryProxy extends RegistryProxy {
     return res;
   }
 
+  /**
+   * Date the versions of a document. `skip` lists versions not to date — ones
+   * an earlier upstream of the group already decides — and only matters where
+   * dating costs a request per version.
+   */
   private async fetchVersions(
     upstream: MavenUpstream,
     metadata: string,
     xmlPath: string,
+    skip: ReadonlySet<string> = new Set(),
   ): Promise<VersionMetadata[]> {
     // A version-level maven-metadata.xml describes one timestamped SNAPSHOT
     // build and carries its own timestamp, so it needs neither deps.dev nor a
@@ -370,6 +452,7 @@ export class MavenRegistryProxy extends RegistryProxy {
         metadata,
         groupId,
         artifactId,
+        skip,
       );
     }
 
@@ -411,9 +494,10 @@ export class MavenRegistryProxy extends RegistryProxy {
     metadata: string,
     groupId: string,
     artifactId: string,
+    skip: ReadonlySet<string>,
   ): Promise<VersionMetadata[]> {
     const packageName = `${groupId}:${artifactId}`;
-    const versions = parseVersionsFromXml(metadata);
+    const versions = parseVersionsFromXml(metadata).filter((v) => !skip.has(v));
     if (versions.length === 0) return [];
 
     const cutoff = new Date(Date.now() - this.config.delayMs);
@@ -485,7 +569,14 @@ export class MavenRegistryProxy extends RegistryProxy {
     const file = version.endsWith('-SNAPSHOT')
       ? 'maven-metadata.xml'
       : `${artifactId}-${version}.pom`;
-    return this.fetchLastModified(`${dir}/${file}`);
+    // A probe that fails leaves the version undated, which keeps it out —
+    // the same as a missing Last-Modified — rather than failing the document.
+    try {
+      return await this.fetchLastModified(`${dir}/${file}`);
+    } catch (err) {
+      console.error(`[${this.name}] HEAD ${dir}/${file} failed: ${String(err)}`);
+      return null;
+    }
   }
 
   /** A URL's `Last-Modified`, or null when it is missing or unreadable. */
@@ -795,4 +886,15 @@ function filterMavenMetadataXml(
 /** Format a Date as Maven's `lastUpdated` timestamp: `yyyyMMddHHmmss` in UTC. */
 function formatMavenTimestamp(date: Date): string {
   return date.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+}
+
+/** A 502 standing in for an upstream that could not be reached. */
+function badGateway(message: string): AxiosResponse<string> {
+  return {
+    status: 502,
+    statusText: 'Bad Gateway',
+    headers: { 'content-type': 'application/json' },
+    data: JSON.stringify({ error: 'Bad Gateway', message }),
+    config: {} as AxiosResponse['config'],
+  };
 }
