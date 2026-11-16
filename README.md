@@ -361,7 +361,7 @@ Available examples: `bundler`, `composer`, `go`, `gradle`, `maven`, `npm`, `pip`
 
 **Snapshots.** A `-SNAPSHOT` version has a second `maven-metadata.xml` inside its version directory describing one timestamped build. Its `<lastUpdated>` (or `<snapshot><timestamp>`) is the build's time, so no external lookup is needed — the document is served whole when that build is past the cooldown and 404'd when it is not. A snapshot under active development is therefore unavailable until its latest build ages, which is what a cooldown means for a mutable version; use the allowlist for exceptions. On the artifact-level listing, a `-SNAPSHOT` entry is probed through that same version-directory `maven-metadata.xml` rather than a `{artifact}-{version}.pom`, which snapshots do not have.
 
-> **Note:** `maven-metadata.xml` does not include publication timestamps, so for Maven Central they are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). An upstream on a Central mirror under another host needs `#timestamps=deps-dev` to keep using it.
+> **Note:** `maven-metadata.xml` does not include publication timestamps, so for Maven Central they are fetched from the [deps.dev API](https://api.deps.dev/) (`api.deps.dev`). An upstream on a Central mirror under another host needs `#timestamps=deps-dev` to keep using it. deps.dev can index a version days or weeks after it reaches Central; until it does, that version is dated by the upstream's `Last-Modified`, the same as with `#timestamps=last-modified`.
 
 ### Maven groups and other repositories
 
