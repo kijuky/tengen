@@ -147,12 +147,70 @@ describe("MavenRegistryProxy – download routing", () => {
     expect(res.status).toHaveBeenCalledWith(404);
   });
 
-  it("blocks JARs when deps.dev returns no result", async () => {
+  it("blocks JARs when neither deps.dev nor the upstream dates them", async () => {
     vi.mocked(axios.get).mockResolvedValueOnce({
       status: 404,
       data: {},
       headers: {},
     });
+    vi.mocked(axios.head).mockResolvedValueOnce({ status: 200, headers: {} } as any);
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("dates a version deps.dev does not know yet by the upstream's Last-Modified", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 404,
+      data: {},
+      headers: {},
+    });
+    vi.mocked(axios.head).mockResolvedValueOnce({
+      status: 200,
+      headers: { "last-modified": new Date(BEFORE_CUTOFF).toUTCString() },
+    } as any);
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
+      res,
+    );
+    expect(vi.mocked(axios.head).mock.calls[0]?.[0]).toBe(
+      "https://repo1.maven.org/maven2/com/example/mylib/1.0.0/mylib-1.0.0.jar",
+    );
+    expect(res.redirect).toHaveBeenCalledWith(
+      307,
+      "https://repo1.maven.org/maven2/com/example/mylib/1.0.0/mylib-1.0.0.jar",
+    );
+  });
+
+  it("still holds a version deps.dev does not know for the cooldown", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 404,
+      data: {},
+      headers: {},
+    });
+    vi.mocked(axios.head).mockResolvedValueOnce({
+      status: 200,
+      headers: { "last-modified": new Date(AFTER_CUTOFF).toUTCString() },
+    } as any);
+    const res = makeRes();
+    await proxy.handleRequest(
+      makeReq("/com/example/mylib/2.0.0/mylib-2.0.0.jar"),
+      res,
+    );
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it("blocks JARs when the Last-Modified probe fails", async () => {
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 404,
+      data: {},
+      headers: {},
+    });
+    vi.mocked(axios.head).mockRejectedValueOnce(new Error("ECONNRESET"));
     const res = makeRes();
     await proxy.handleRequest(
       makeReq("/com/example/mylib/1.0.0/mylib-1.0.0.jar"),
@@ -211,6 +269,46 @@ describe("MavenRegistryProxy – metadata filtering", () => {
     // 1.1.0 published at 2024-01-01T00:00:01Z → Maven yyyyMMddHHmmss (UTC)
     expect(body).toContain("<lastUpdated>20240101000001</lastUpdated>");
     expect(body).not.toContain("<lastUpdated>20240201000000</lastUpdated>");
+  });
+
+  it("dates versions deps.dev does not list yet by the upstream's Last-Modified", async () => {
+    const xml = makeXml(["1.0.0", "1.1.0", "2.0.0"]);
+    vi.mocked(axios.head).mockImplementation(async (url: string) => ({
+      status: 200,
+      headers: {
+        "last-modified": new Date(
+          String(url).includes("/1.1.0/") ? BEFORE_CUTOFF : AFTER_CUTOFF,
+        ).toUTCString(),
+      },
+    }) as any);
+    const res = await handle("/com/example/mylib/maven-metadata.xml", xml, [
+      { versionKey: { version: "1.0.0" }, publishedAt: new Date(BEFORE_CUTOFF).toISOString() },
+    ]);
+    const heads = vi.mocked(axios.head).mock.calls.map(([url]) => String(url));
+    expect(heads).toEqual([
+      "https://repo1.maven.org/maven2/com/example/mylib/1.1.0/mylib-1.1.0.pom",
+      "https://repo1.maven.org/maven2/com/example/mylib/2.0.0/mylib-2.0.0.pom",
+    ]);
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).toContain("<version>1.0.0</version>");
+    expect(body).toContain("<version>1.1.0</version>");
+    expect(body).not.toContain("<version>2.0.0</version>");
+  });
+
+  it("dates every version by Last-Modified when deps.dev does not know the package", async () => {
+    const xml = makeXml(["1.0.0"]);
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({ status: 200, data: xml, headers: {} })
+      .mockResolvedValueOnce({ status: 404, data: {}, headers: {} });
+    vi.mocked(axios.head).mockResolvedValue({
+      status: 200,
+      headers: { "last-modified": new Date(BEFORE_CUTOFF).toUTCString() },
+    } as any);
+    const res = makeRes();
+    await proxy.handleRequest(makeReq("/com/example/mylib/maven-metadata.xml"), res);
+    expect(res.status).toHaveBeenCalledWith(200);
+    const body = vi.mocked(res.send).mock.calls[0][0] as string;
+    expect(body).toContain("<version>1.0.0</version>");
   });
 
   it("returns 404 when all versions are filtered out", async () => {

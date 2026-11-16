@@ -344,21 +344,38 @@ export class MavenRegistryProxy extends RegistryProxy {
   ): Promise<VersionMetadata | null> {
     const packageName = `${groupId}:${artifactId}`;
 
-    if (upstream.timestamps === 'last-modified') {
-      // Probe the requested file itself rather than a constructed POM path: a
-      // snapshot artifact is named {artifact}-{version}-{timestamp}-{build}.ext
-      // and has no {artifact}-{version}.pom beside it, so deriving the POM name
-      // would 404 and block every snapshot download.
-      const published = await this.fetchLastModified(`${upstream.url}${path}`);
+    // Probe the requested file itself rather than a constructed POM path: a
+    // snapshot artifact is named {artifact}-{version}-{timestamp}-{build}.ext
+    // and has no {artifact}-{version}.pom beside it, so deriving the POM name
+    // would 404 and block every snapshot download.
+    const viaLastModified = async (): Promise<VersionMetadata | null> => {
+      const url = `${upstream.url}${path}`;
+      // A probe that fails leaves the version undated, which blocks it.
+      let published: Date | null;
+      try {
+        published = await this.fetchLastModified(url);
+      } catch (err) {
+        console.error(`[${this.name}] HEAD ${url} failed: ${String(err)}`);
+        return null;
+      }
       if (!published) return null;
       return { packageName, version, published };
+    };
+
+    if (upstream.timestamps === 'last-modified') {
+      return viaLastModified();
     }
 
     const res = await axios.get<DepsDevVersionResponse>(
       `https://api.deps.dev/v3alpha/systems/maven/packages/${packageName}/versions/${encodeURIComponent(version)}`,
       { validateStatus: () => true, maxRedirects: 0 },
     );
-    if (res.status !== 200 || !res.data?.publishedAt) return null;
+    if (res.status !== 200 || !res.data?.publishedAt) {
+      // deps.dev indexes some packages days or weeks after they reach Central.
+      // Until it does, the upstream's own Last-Modified dates the file, so the
+      // version is still held for the cooldown instead of being refused for good.
+      return viaLastModified();
+    }
     return {
       packageName,
       version: res.data.versionKey.version,
@@ -460,12 +477,34 @@ export class MavenRegistryProxy extends RegistryProxy {
       `https://api.deps.dev/v3alpha/systems/maven/packages/${packageName}`,
       { validateStatus: () => true, maxRedirects: 0 },
     );
-    if (res.status !== 200 || !res.data?.versions) return [];
-    return res.data.versions.map((v) => ({
+    if (res.status !== 200 || !res.data?.versions) {
+      // deps.dev does not know the package yet: date it the way a non-Central
+      // upstream is dated.
+      return this.fetchVersionsViaLastModified(
+        upstream,
+        metadata,
+        groupId,
+        artifactId,
+        skip,
+      );
+    }
+    const dated: VersionMetadata[] = res.data.versions.map((v) => ({
       packageName,
       version: v.versionKey.version,
       published: new Date(v.publishedAt),
     }));
+    // deps.dev can lag Central by days or weeks for a single version too. Those
+    // listed in the metadata but missing there are probed on the upstream.
+    const known = new Set(dated.map((v) => v.version));
+    const missing = parseVersionsFromXml(metadata).filter(
+      (v) => !known.has(v) && !skip.has(v),
+    );
+    if (missing.length === 0) return dated;
+    const probed = await this.probeAll(upstream, groupId, artifactId, missing);
+    for (const [version, published] of probed) {
+      if (published) dated.push({ packageName, version, published });
+    }
+    return dated;
   }
 
   /**
