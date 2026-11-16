@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { PassThrough, Readable } from "node:stream";
 import { once } from "node:events";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Response } from "express";
@@ -272,6 +278,58 @@ describe("RegistryProxy – download cache", () => {
       "https://upstream.example.com/pkg/-/pkg-1.0.0.tgz",
     );
     expect(mockedGet).not.toHaveBeenCalled();
+  });
+});
+
+describe("RegistryProxy – download cache encoding", () => {
+  it("asks the upstream for the artifact unencoded", async () => {
+    const proxy = makeProxy();
+    upstreamReturns("tarball-bytes");
+
+    await once((await request(proxy, "/pkg/-/pkg-1.0.0.tgz")).sink, "finish");
+
+    expect(mockedGet).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({ "accept-encoding": "identity" }),
+      }),
+    );
+  });
+
+  it("relays an encoded response but does not store it", async () => {
+    const proxy = makeProxy();
+    upstreamReturns("compressed", { "content-encoding": "br" });
+
+    const r = await request(proxy, "/pkg/-/pkg-1.0.0.tgz");
+    await once(r.sink, "finish");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(r.sentHeaders["content-encoding"]).toBe("br");
+    expect(cachedFiles()).toEqual([]);
+  });
+
+  it("drops an entry stored with a content encoding and fetches it again", async () => {
+    const proxy = makeProxy();
+    upstreamReturns("tarball-bytes");
+    await once((await request(proxy, "/pkg/-/pkg-1.0.0.tgz")).sink, "finish");
+    await waitForCachedEntries(1);
+    // Rewrite the sidecar as an earlier version stored it: with the encoding.
+    const sidecar = readdirSync(join(dir, "cache", "dl")).find((n) =>
+      n.endsWith(".json"),
+    )!;
+    const file = join(dir, "cache", "dl", sidecar);
+    const data = JSON.parse(readFileSync(file, "utf-8"));
+    data.headers["content-encoding"] = "br";
+    writeFileSync(file, JSON.stringify(data));
+    mockedGet.mockClear();
+    upstreamReturns("tarball-bytes");
+
+    const r = await request(proxy, "/pkg/-/pkg-1.0.0.tgz");
+    await once(r.sink, "finish");
+
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(r.sentHeaders["content-encoding"]).toBeUndefined();
+    expect(r.body()).toBe("tarball-bytes");
   });
 });
 

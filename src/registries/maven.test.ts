@@ -374,7 +374,12 @@ describe("MavenRegistryProxy – last-modified timestamp source", () => {
     lmProxy = new MavenRegistryProxy({
       name: "sbt-releases",
       upstream: "https://repo.scala-sbt.org/scalasbt/maven-releases",
-      timestampSource: "last-modified",
+      upstreams: [
+        {
+          url: "https://repo.scala-sbt.org/scalasbt/maven-releases",
+          timestamps: "last-modified",
+        },
+      ],
       delayMs: DELAY_MS,
       maliciousDbPath: "/dev/null",
     });
@@ -915,7 +920,7 @@ describe("MavenRegistryProxy – last-modified downloads probe the requested fil
     mockReadFileSync.mockReturnValue(JSON.stringify({}));
     lm = new MavenRegistryProxy({
       upstream: "https://example.com/m2",
-      timestampSource: "last-modified",
+      upstreams: [{ url: "https://example.com/m2", timestamps: "last-modified" }],
       delayMs: DELAY_MS,
       maliciousDbPath: "/dev/null",
     });
@@ -938,5 +943,241 @@ describe("MavenRegistryProxy – last-modified downloads probe the requested fil
       `https://example.com/m2${path}`,
     );
     expect(res.status).not.toHaveBeenCalledWith(404);
+  });
+});
+
+describe("MavenRegistryProxy – groups", () => {
+  const A = "https://a.example.com/m2";
+  const B = "https://b.example.com/m2";
+  const METADATA = "/com/example/mylib/maven-metadata.xml";
+
+  /** Metadata per upstream (null → 404), and POM dates keyed by URL suffix. */
+  function mockUpstreams(
+    docs: Record<string, string[] | null | number>,
+    dates: Record<string, number>,
+  ) {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const base = Object.keys(docs).find((b) => url.startsWith(b))!;
+      const doc = docs[base];
+      if (typeof doc === "number") {
+        return { status: doc, data: "upstream failed", headers: {} } as any;
+      }
+      if (doc === null) return { status: 404, data: "", headers: {} } as any;
+      return { status: 200, data: makeXml(doc), headers: {} } as any;
+    });
+    vi.mocked(axios.head).mockImplementation(async (url: string) => {
+      const date = dates[url];
+      if (date === undefined) return { status: 404, headers: {} } as any;
+      return {
+        status: 200,
+        headers: { "last-modified": new Date(date).toUTCString() },
+      } as any;
+    });
+  }
+
+  function pom(base: string, version: string) {
+    return `${base}/com/example/mylib/${version}/mylib-${version}.pom`;
+  }
+
+  function group() {
+    return new MavenRegistryProxy({
+      upstream: A,
+      upstreams: [
+        { url: A, timestamps: "last-modified" },
+        { url: B, timestamps: "last-modified" },
+      ],
+      delayMs: DELAY_MS,
+      maliciousDbPath: "/dev/null",
+    });
+  }
+
+  async function metadata(path = METADATA) {
+    const res = makeRes();
+    await group().handleRequest(makeReq(path) as any, res as any);
+    return res;
+  }
+
+  function versionsIn(res: ReturnType<typeof makeRes>): string[] {
+    const xml = String(vi.mocked(res.send).mock.calls[0]?.[0] ?? "");
+    return [...xml.matchAll(/<version>([^<]*)<\/version>/g)].map((m) => m[1]!);
+  }
+
+  beforeEach(() => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({}));
+  });
+
+  it("merges the versions of every upstream, first upstream first", async () => {
+    mockUpstreams(
+      { [A]: ["1.0.0", "1.1.0"], [B]: ["1.1.0", "2.0.0"] },
+      {
+        [pom(A, "1.0.0")]: BEFORE_CUTOFF,
+        [pom(A, "1.1.0")]: BEFORE_CUTOFF + 1000,
+        [pom(B, "1.1.0")]: BEFORE_CUTOFF + 1000,
+        [pom(B, "2.0.0")]: BEFORE_CUTOFF + 2000,
+      },
+    );
+
+    const res = await metadata();
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(versionsIn(res)).toEqual(["1.0.0", "1.1.0", "2.0.0"]);
+    const xml = String(vi.mocked(res.send).mock.calls[0]?.[0]);
+    expect(xml).toContain("<latest>2.0.0</latest>");
+    expect(xml).toContain("<release>2.0.0</release>");
+  });
+
+  it("lets the first upstream listing a version decide it", async () => {
+    // A lists 1.1.0 inside the cooldown; B's older copy must not let it in,
+    // since a download of 1.1.0 would be served from A.
+    mockUpstreams(
+      { [A]: ["1.0.0", "1.1.0"], [B]: ["1.1.0"] },
+      {
+        [pom(A, "1.0.0")]: BEFORE_CUTOFF,
+        [pom(A, "1.1.0")]: AFTER_CUTOFF,
+        [pom(B, "1.1.0")]: BEFORE_CUTOFF,
+      },
+    );
+
+    expect(versionsIn(await metadata())).toEqual(["1.0.0"]);
+  });
+
+  it("answers from the upstreams that have the metadata", async () => {
+    mockUpstreams({ [A]: null, [B]: ["2.0.0"] }, { [pom(B, "2.0.0")]: BEFORE_CUTOFF });
+
+    expect(versionsIn(await metadata())).toEqual(["2.0.0"]);
+  });
+
+  it("answers 404 when no upstream has the metadata", async () => {
+    mockUpstreams({ [A]: null, [B]: null }, {});
+
+    expect((await metadata()).status).toHaveBeenCalledWith(404);
+  });
+
+  it("passes on a failure other than 404 when no upstream has the metadata", async () => {
+    mockUpstreams({ [A]: null, [B]: 503 }, {});
+
+    expect((await metadata()).status).toHaveBeenCalledWith(503);
+  });
+
+  it("answers from the other upstreams when one cannot be reached", async () => {
+    mockUpstreams({ [B]: ["2.0.0"] }, { [pom(B, "2.0.0")]: BEFORE_CUTOFF });
+    const answer = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url: string, ...rest) => {
+      if (url.startsWith(A)) throw new Error("read ECONNRESET");
+      return answer(url, ...rest);
+    });
+
+    const res = await metadata();
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(versionsIn(res)).toEqual(["2.0.0"]);
+  });
+
+  it("answers 502 when every upstream fails to be reached", async () => {
+    vi.mocked(axios.get).mockRejectedValue(new Error("read ECONNRESET"));
+
+    expect((await metadata()).status).toHaveBeenCalledWith(502);
+  });
+
+  it("serves a download from a later upstream when an earlier one cannot be reached", async () => {
+    const path = "/com/example/mylib/2.0.0/mylib-2.0.0.jar";
+    mockUpstreams({}, { [`${B}${path}`]: BEFORE_CUTOFF });
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) => {
+      if (url.startsWith(A)) throw new Error("read ECONNRESET");
+      return answer(url, ...rest);
+    });
+
+    const res = makeRes();
+    await group().handleRequest(makeReq(path) as any, res as any);
+
+    expect(res.redirect).toHaveBeenCalledWith(307, `${B}${path}`);
+  });
+
+  it("does not date a version in a later upstream that an earlier one listed", async () => {
+    mockUpstreams(
+      { [A]: ["1.0.0", "1.1.0"], [B]: ["1.1.0", "2.0.0"] },
+      {
+        [pom(A, "1.0.0")]: BEFORE_CUTOFF,
+        [pom(A, "1.1.0")]: BEFORE_CUTOFF,
+        [pom(B, "2.0.0")]: BEFORE_CUTOFF,
+      },
+    );
+
+    const res = await metadata();
+
+    expect(versionsIn(res)).toEqual(["1.0.0", "1.1.0", "2.0.0"]);
+    const heads = vi.mocked(axios.head).mock.calls.map(([url]) => url);
+    expect(heads).not.toContain(pom(B, "1.1.0"));
+    expect(heads).toContain(pom(B, "2.0.0"));
+  });
+
+  it("leaves out a version whose probe fails, and still answers", async () => {
+    mockUpstreams(
+      { [A]: ["1.0.0", "1.1.0"], [B]: null },
+      { [pom(A, "1.0.0")]: BEFORE_CUTOFF },
+    );
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) => {
+      if (url === pom(A, "1.1.0")) throw new Error("AggregateError");
+      return answer(url, ...rest);
+    });
+
+    const res = await metadata();
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(versionsIn(res)).toEqual(["1.0.0"]);
+  });
+
+  it("checksums the merged document", async () => {
+    mockUpstreams(
+      { [A]: ["1.0.0"], [B]: ["2.0.0"] },
+      { [pom(A, "1.0.0")]: BEFORE_CUTOFF, [pom(B, "2.0.0")]: BEFORE_CUTOFF },
+    );
+    const xml = String(vi.mocked((await metadata()).send).mock.calls[0]?.[0]);
+
+    const sha1 = await metadata(`${METADATA}.sha1`);
+
+    expect(vi.mocked(sha1.send).mock.calls[0]?.[0]).toBe(
+      createHash("sha1").update(xml).digest("hex"),
+    );
+  });
+
+  it("serves a download from the first upstream that holds it", async () => {
+    const path = "/com/example/mylib/2.0.0/mylib-2.0.0.jar";
+    mockUpstreams({}, { [`${B}${path}`]: BEFORE_CUTOFF });
+
+    const res = makeRes();
+    await group().handleRequest(makeReq(path) as any, res as any);
+
+    expect(res.redirect).toHaveBeenCalledWith(307, `${B}${path}`);
+  });
+
+  it("does not fall through when the holder's date cannot be read", async () => {
+    const path = "/com/example/mylib/2.0.0/mylib-2.0.0.jar";
+    mockUpstreams({}, { [`${B}${path}`]: BEFORE_CUTOFF });
+    const answer = vi.mocked(axios.head).getMockImplementation()!;
+    vi.mocked(axios.head).mockImplementation(async (url: string, ...rest) =>
+      url === `${A}${path}`
+        ? ({ status: 200, headers: {} } as any)
+        : answer(url, ...rest),
+    );
+
+    const res = makeRes();
+    await group().handleRequest(makeReq(path) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
+  it("does not fall through to a later upstream when the holder blocks it", async () => {
+    const path = "/com/example/mylib/2.0.0/mylib-2.0.0.jar";
+    mockUpstreams({}, { [`${A}${path}`]: AFTER_CUTOFF, [`${B}${path}`]: BEFORE_CUTOFF });
+
+    const res = makeRes();
+    await group().handleRequest(makeReq(path) as any, res as any);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.redirect).not.toHaveBeenCalled();
   });
 });

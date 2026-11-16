@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { expect } from 'vitest';
 import { createServer } from '../server.ts';
+import { resolveRegistries } from '../registry-spec.ts';
 
 export const DELAY_DAYS = 7;
 export const CUTOFF = new Date('2024-01-15T00:00:00Z');
@@ -78,6 +79,12 @@ export interface StartTestServerOptions {
   upstreams?: Partial<typeof DEFAULT_UPSTREAMS>;
 }
 
+/** The built-in registries, each pointed at the given upstream. */
+function registriesFor(upstreams: typeof DEFAULT_UPSTREAMS) {
+  const { gradlePlugins, ...rest } = upstreams;
+  return resolveRegistries([], { ...rest, 'gradle-plugins': gradlePlugins });
+}
+
 export async function startTestServer(
   opts: StartTestServerOptions = {},
 ): Promise<TestServer> {
@@ -86,7 +93,7 @@ export async function startTestServer(
     port: 0,
     delayDays: DELAY_DAYS,
     maliciousDbPath: '/dev/null',
-    upstreams: { ...DEFAULT_UPSTREAMS, ...opts.upstreams },
+    registries: registriesFor({ ...DEFAULT_UPSTREAMS, ...opts.upstreams }),
     upstreamAccess: opts.upstreamAccess ?? 'direct',
   });
 

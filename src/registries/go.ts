@@ -8,7 +8,7 @@ interface GoVersionInfo {
 }
 
 export class GoRegistryProxy extends RegistryProxy {
-  readonly name = 'go';
+  readonly name: string = this.config.name ?? 'go';
 
   public setRouting() {
     this.addCustomRoute({

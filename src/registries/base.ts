@@ -38,25 +38,20 @@ export interface RegistryConfig {
    */
   baseUrl?: string;
   /**
-   * Overrides the registry's URL prefix and display name. Used to mount several
-   * instances of the same proxy class at different paths — e.g. additional Maven
-   * repositories declared with `--maven-repo <name>=<url>`. Registries with a
-   * fixed name ignore this.
+   * The path the registry is mounted at (`/{name}`), and its display name.
+   * Defaults to the registry type, so it only needs setting for a second
+   * registry of the same type.
    */
   name?: string;
   /**
-   * Where a Maven-layout registry reads version publish timestamps from:
-   * - "deps-dev" (default): query the deps.dev API. A version deps.dev has no
-   *   record of stays blocked (fail-closed).
-   * - "last-modified": HEAD the version's POM on the upstream and use its
-   *   `Last-Modified` header.
-   *
-   * The two are exclusive. deps.dev only indexes Maven Central, so a repository
-   * other than Central must use "last-modified" — with "deps-dev" every version
-   * would be unknown and its metadata would come back empty. Ignored by
-   * non-Maven registries.
+   * URL a reverse proxy serves this registry at, at the root of its own host
+   * (the proxy adds the `/{name}` prefix before forwarding). URLs tengen hands
+   * back — artifact links in metadata, relayed upstream redirects — then point
+   * under it instead of carrying the `/{name}` prefix. Artifact links are
+   * rewritten in either `upstreamAccess` mode, since setting one says clients
+   * should fetch through it.
    */
-  timestampSource?: 'deps-dev' | 'last-modified';
+  publicUrl?: string;
   /**
    * Directory to keep downloaded artifacts in. When set, an allowed download is
    * fetched through the proxy, stored, and served from disk afterwards. A
@@ -71,6 +66,11 @@ export interface VersionMetadata {
   packageName: string;
   version: string;
   published: Date;
+  /**
+   * Where to download the requested artifact from, when it is not the
+   * registry's own upstream — a group answers from whichever member holds it.
+   */
+  upstreamUrl?: string;
 }
 
 interface DownloadRouting<
@@ -235,6 +235,22 @@ export abstract class RegistryProxy {
     this.routing.push(route);
   }
 
+  /**
+   * Absolute URL prefix that artifact links embedded in metadata are rewritten
+   * to, or null to leave them pointing at the upstream.
+   *
+   * - The public URL when there is one: the registry is served at its root, so
+   *   the `/{name}` prefix is not added.
+   * - Otherwise `{baseUrl}/{name}` in `proxied` mode, where the upstream is
+   *   unreachable and links have to point at the proxy.
+   */
+  protected get artifactBaseUrl(): string | null {
+    if (this.config.publicUrl) return this.config.publicUrl;
+    return this.config.upstreamAccess === 'proxied' && this.config.baseUrl
+      ? `${this.config.baseUrl}/${this.name}`
+      : null;
+  }
+
   /** Build the full upstream URL from an incoming request. */
   protected buildUpstreamUrl(req: Request): string {
     const base = this.config.upstream.replace(/\/$/, '');
@@ -270,10 +286,11 @@ export abstract class RegistryProxy {
           const locationUrl = new URL(location);
           const upstreamUrl = new URL(this.config.upstream);
           if (locationUrl.origin === upstreamUrl.origin) {
+            // Behind a public URL the registry sits at the root of its own
+            // host, where a `/{name}` prefix would be added a second time.
             res.set(
               'location',
-              '/' +
-                this.name +
+              (this.config.publicUrl ?? '/' + this.name) +
                 locationUrl.pathname +
                 locationUrl.search +
                 locationUrl.hash,
@@ -355,7 +372,7 @@ export abstract class RegistryProxy {
       await this.fetchIntoCache(cache, versionMeta, req, res);
       return;
     }
-    await this.handlePassthrough(req, res);
+    await this.handlePassthrough(req, res, versionMeta.upstreamUrl);
   }
 
   /** Answer a download from the cache. */
@@ -393,11 +410,19 @@ export abstract class RegistryProxy {
     req: Request,
     res: Response,
   ): Promise<void> {
-    const upstream = await axios.get(this.buildUpstreamUrl(req), {
-      responseType: 'stream',
-      decompress: false,
-      validateStatus: () => true,
-    });
+    // Ask for the artifact as it is. Left to its default, axios accepts
+    // gzip and brotli, and the compressed bytes would be stored and replayed
+    // to clients that cannot decode them — Coursier then sees a checksum that
+    // does not match.
+    const upstream = await axios.get(
+      version.upstreamUrl ?? this.buildUpstreamUrl(req),
+      {
+        responseType: 'stream',
+        decompress: false,
+        headers: { 'accept-encoding': 'identity' },
+        validateStatus: () => true,
+      },
+    );
     const body = upstream.data as NodeJS.ReadableStream;
 
     res.status(upstream.status);
@@ -407,7 +432,12 @@ export abstract class RegistryProxy {
       res.setHeader(key, value as string | string[]);
     }
 
-    if (upstream.status === 200) {
+    // An upstream that encodes anyway is relayed as it answered, but not
+    // stored: only the artifact itself is kept.
+    const encoding = upstream.headers['content-encoding'];
+    const encoded =
+      typeof encoding === 'string' && encoding !== '' && encoding !== 'identity';
+    if (upstream.status === 200 && !encoded) {
       const headers: Partial<Record<(typeof CACHED_HEADERS)[number], string>> =
         {};
       for (const key of CACHED_HEADERS) {
@@ -468,15 +498,20 @@ export abstract class RegistryProxy {
     return removed;
   }
 
+  /**
+   * Hand a request to the upstream. `upstreamUrl` overrides the URL built
+   * from the registry's own upstream.
+   */
   protected async handlePassthrough(
     req: Request,
     res: Response,
+    upstreamUrl?: string,
   ): Promise<void> {
+    const url = upstreamUrl ?? this.buildUpstreamUrl(req);
     if (this.config.upstreamAccess === 'proxied') {
-      await this.pipePassthrough(req, res);
+      await this.pipePassthrough(req, res, url);
       return;
     }
-    const url = this.buildUpstreamUrl(req);
     // Always use 307 so the client preserves the original HTTP method (e.g.
     // POST for npm audit). 302 allows clients to switch to GET, which causes
     // upstream to return 405 Method Not Allowed.
@@ -487,8 +522,11 @@ export abstract class RegistryProxy {
    * Stream the upstream response back through the proxy instead of redirecting.
    * Used when clients can only reach the proxy directly (not the upstream).
    */
-  private async pipePassthrough(req: Request, res: Response): Promise<void> {
-    const url = this.buildUpstreamUrl(req);
+  private async pipePassthrough(
+    req: Request,
+    res: Response,
+    url: string,
+  ): Promise<void> {
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
     // Forward the client's request headers (e.g. content-encoding for npm
     // audit's gzipped POST body) except hop-by-hop headers and host, which

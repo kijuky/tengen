@@ -5,10 +5,14 @@ import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 import type { VersionMetadata } from './base.ts';
 
-/** Response headers kept with a cached artifact and replayed on a hit. */
+/**
+ * Response headers kept with a cached artifact and replayed on a hit.
+ *
+ * `content-encoding` is not among them: what is stored is the artifact itself,
+ * so a hit can be served to any client, whatever it asked to accept.
+ */
 export const CACHED_HEADERS = [
   'content-type',
-  'content-encoding',
   'last-modified',
   'etag',
 ] as const;
@@ -71,6 +75,14 @@ export class DownloadCache {
     try {
       sidecar = JSON.parse(await readFile(files.sidecar, 'utf-8')) as Sidecar;
     } catch {
+      return null;
+    }
+    // An entry with a content encoding holds compressed bytes rather than the
+    // artifact; replaying it would hand clients that never asked for the
+    // encoding something whose checksum does not match. Drop it so the
+    // artifact is fetched again.
+    if ('content-encoding' in (sidecar.headers as Record<string, string>)) {
+      await this.remove(path);
       return null;
     }
     try {

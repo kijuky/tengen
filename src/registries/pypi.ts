@@ -40,7 +40,7 @@ interface SimpleApiMetadata {
 }
 
 export class PypiRegistryProxy extends RegistryProxy {
-  readonly name = 'pypi';
+  readonly name: string = this.config.name ?? 'pypi';
 
   /**
    * Routes:
@@ -49,19 +49,6 @@ export class PypiRegistryProxy extends RegistryProxy {
    *   /pypi/{name}/{version}/json → JSON API metadata (version-specific)
    *   /packages/...               → download route (version-filtered then passthrough)
    */
-  /**
-   * Absolute URL prefix for rewriting artifact links so clients fetch through
-   * the proxy. Returns `{baseUrl}/{name}` in proxied mode when --base-url is set
-   * (the upstream is unreachable, so links must be absolute and point here), or
-   * null otherwise — callers then fall back to a proxy-root-relative path
-   * (Simple API) or leave the upstream URL intact (JSON API).
-   */
-  private pipeArtifactBase(): string | null {
-    return this.config.upstreamAccess === 'proxied' && this.config.baseUrl
-      ? `${this.config.baseUrl}/${this.name}`
-      : null;
-  }
-
   public setRouting() {
     this.addMetadataRoute<SimpleApiMetadata, PypiVersionMetadataType>({
       condition: (req) => req.path.startsWith('/simple/'),
@@ -80,16 +67,16 @@ export class PypiRegistryProxy extends RegistryProxy {
       getVersions: (metadata) => getSimpleApiVersions(metadata),
       filterMetadata: filterSimpleApiMetadata,
       respond: (res, filtered, req) => {
-        // Only rewrite file URLs in proxied mode. In direct mode the upstream
-        // (files.pythonhosted.org) is reachable, so leave the URLs pointing
-        // there and let the client download directly. In proxied mode use an
-        // absolute --base-url when set, otherwise a proxy-root-relative path
-        // (PEP 503 clients resolve it against the index URL, which already
-        // points at the proxy).
+        // Rewrite file URLs when clients should fetch through the proxy: to
+        // the absolute artifactBaseUrl (the public URL, or --base-url in
+        // proxied mode), otherwise in proxied mode to a proxy-root-relative
+        // path (PEP 503 clients resolve it against the index URL, which
+        // already points at the proxy). In direct mode without a public URL
+        // the upstream (files.pythonhosted.org) is reachable, so the URLs are
+        // left pointing there.
         const urlPrefix =
-          this.config.upstreamAccess === 'proxied'
-            ? (this.pipeArtifactBase() ?? '/' + this.name)
-            : null;
+          this.artifactBaseUrl ??
+          (this.config.upstreamAccess === 'proxied' ? '/' + this.name : null);
         const rewritten = urlPrefix
           ? rewriteFileUrls(filtered, urlPrefix)
           : filtered;
@@ -114,13 +101,12 @@ export class PypiRegistryProxy extends RegistryProxy {
       getVersions: getPackageLevelVersions,
       filterMetadata: (metadata, allowedVersions) => {
         const filtered = filterPackageLevelMetadata(metadata, allowedVersions);
-        // The JSON API embeds absolute file URLs (files.pythonhosted.org). In
-        // proxied mode that host is unreachable, so rewrite them to this proxy.
+        // The JSON API embeds absolute file URLs (files.pythonhosted.org).
+        // Rewrite them to this proxy when clients should fetch through it.
         // pip/poetry/uv install via the Simple API; this covers tools that read
-        // download URLs from the JSON API. Requires --base-url because JSON-API
-        // consumers expect absolute URLs; left intact in direct mode or when
-        // no base URL is set.
-        const base = this.pipeArtifactBase();
+        // download URLs from the JSON API. JSON-API consumers expect absolute
+        // URLs, so without an artifactBaseUrl they are left intact.
+        const base = this.artifactBaseUrl;
         return base ? rewriteJsonApiFileUrls(filtered, base) : filtered;
       },
     });

@@ -24,7 +24,7 @@ function compactVersionKey(v: RubyGemVersion): string {
 }
 
 export class RubygemsRegistryProxy extends RegistryProxy {
-  readonly name = 'rubygems';
+  readonly name: string = this.config.name ?? 'rubygems';
 
   public setRouting() {
     this.addCustomRoute({

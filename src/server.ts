@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadConfig, type Config } from './config.ts';
 import { MavenRegistryProxy } from './registries/maven.ts';
-import { IvyRegistryProxy } from './registries/ivy.ts';
+import { IvyRegistryProxy, type IvyUpstream } from './registries/ivy.ts';
+import type { RegistryProxy, RegistryConfig } from './registries/base.ts';
+import type { RegistrySpec } from './registry-spec.ts';
 import {
   resolveArtifactoryEndpoint,
   type ArtifactoryEndpoint,
@@ -17,15 +19,20 @@ import { GoRegistryProxy } from './registries/go.ts';
 import { ComposerRegistryProxy } from './registries/composer.ts';
 import { buildMaliciousDB } from './scripts/build-malicious-db.ts';
 
-/** A resolved `index=artifactory`: where its API lives and what answered. */
+/** A resolved `#index=artifactory`: where its API lives and what answered. */
 interface IvyIndex {
   endpoint: ArtifactoryEndpoint;
   version: string;
 }
 
+/** Key of an upstream within the registries, for the resolved indexes. */
+function upstreamKey(spec: RegistrySpec, i: number): string {
+  return `${spec.name}#${i}`;
+}
+
 /**
- * Resolve and verify the storage API endpoint for every --ivy-repo that asked
- * for one.
+ * Resolve and verify the storage API endpoint for every Ivy upstream that
+ * asked for one.
  *
  * Done at startup, and fatal on failure: a listing is what a resolver picks a
  * dynamic revision from, so a repository configured to filter it either can or
@@ -35,17 +42,19 @@ async function resolveIvyIndexes(
   config: Config,
 ): Promise<Map<string, IvyIndex>> {
   const indexes = new Map<string, IvyIndex>();
-  for (const repo of config.ivyRepos ?? []) {
-    if (repo.index !== 'artifactory') continue;
-    const resolved = await resolveArtifactoryEndpoint(repo.upstream);
-    if ('error' in resolved) {
-      console.error(
-        `Error: --ivy-repo '${repo.name}' has index=artifactory but its ` +
-          `storage API is unusable: ${resolved.error}`,
-      );
-      process.exit(1);
+  for (const spec of config.registries) {
+    for (const [i, upstream] of spec.upstreams.entries()) {
+      if (upstream.index !== 'artifactory') continue;
+      const resolved = await resolveArtifactoryEndpoint(upstream.url);
+      if ('error' in resolved) {
+        console.error(
+          `Error: ${upstream.url} in registry '${spec.name}' has ` +
+            `#index=artifactory but its storage API is unusable: ${resolved.error}`,
+        );
+        process.exit(1);
+      }
+      indexes.set(upstreamKey(spec, i), resolved);
     }
-    indexes.set(repo.name, resolved);
   }
   return indexes;
 }
@@ -58,111 +67,54 @@ export function createServer(
 
   const delayMs = config.delayDays * 24 * 60 * 60 * 1000;
 
-  const maliciousDbPath = config.maliciousDbPath;
-  const allowlistDbPath = config.allowlistDbPath;
-  const upstreamAccess = config.upstreamAccess;
-  const baseUrl = config.baseUrl;
-  const cacheDir = config.cacheDir;
-  const registries = [
-    new NpmRegistryProxy({
-      upstream: config.upstreams.npm,
+  const registries = config.registries.map((spec): RegistryProxy => {
+    const common: RegistryConfig = {
+      name: spec.name,
+      upstream: spec.upstreams[0]!.url,
+      publicUrl: spec.publicUrl,
       delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    new PypiRegistryProxy({
-      upstream: config.upstreams.pypi,
-      delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    new RubygemsRegistryProxy({
-      upstream: config.upstreams.rubygems,
-      delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    new GoRegistryProxy({
-      upstream: config.upstreams.go,
-      delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    new ComposerRegistryProxy({
-      upstream: config.upstreams.composer,
-      delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    new MavenRegistryProxy({
-      upstream: config.upstreams.maven,
-      timestampSource: config.mavenTimestampSource ?? 'deps-dev',
-      delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    new GradlePluginsRegistryProxy({
-      upstream: config.upstreams.gradlePlugins,
-      delayMs,
-      maliciousDbPath,
-      allowlistDbPath,
-      upstreamAccess,
-      baseUrl,
-      cacheDir,
-    }),
-    // Extra Maven repositories declared with --maven-repo, each mounted at its
-    // own top-level path. deps.dev only indexes Central, so these read publish
-    // timestamps from the upstream's Last-Modified headers.
-    ...(config.mavenRepos ?? []).map(
-      (repo) =>
-        new MavenRegistryProxy({
-          name: repo.name,
-          upstream: repo.upstream,
-          timestampSource: 'last-modified',
-          delayMs,
-          maliciousDbPath,
-          allowlistDbPath,
-          upstreamAccess,
-          baseUrl,
-          cacheDir,
-        }),
-    ),
-    // Ivy-layout repositories declared with --ivy-repo. sbt's default resolver
-    // set includes three of them, so proxying sbt means handling Ivy.
-    ...(config.ivyRepos ?? []).map(
-      (repo) =>
-        new IvyRegistryProxy({
-          name: repo.name,
-          upstream: repo.upstream,
-          endpoint: ivyIndexes.get(repo.name)?.endpoint,
-          delayMs,
-          maliciousDbPath,
-          allowlistDbPath,
-          upstreamAccess,
-          baseUrl,
-          cacheDir,
-        }),
-    ),
-  ];
+      maliciousDbPath: config.maliciousDbPath,
+      allowlistDbPath: config.allowlistDbPath,
+      upstreamAccess: config.upstreamAccess,
+      baseUrl: config.baseUrl,
+      cacheDir: config.cacheDir,
+    };
+    const mavenUpstreams = spec.upstreams.map((u) => ({
+      url: u.url,
+      timestamps: u.timestamps ?? 'deps-dev',
+    }));
+    switch (spec.type) {
+      case 'npm':
+        return new NpmRegistryProxy(common);
+      case 'pypi':
+        return new PypiRegistryProxy(common);
+      case 'rubygems':
+        return new RubygemsRegistryProxy(common);
+      case 'go':
+        return new GoRegistryProxy(common);
+      case 'composer':
+        return new ComposerRegistryProxy(common);
+      case 'maven':
+        return new MavenRegistryProxy({ ...common, upstreams: mavenUpstreams });
+      case 'gradle-plugins':
+        return new GradlePluginsRegistryProxy({
+          ...common,
+          upstreams: mavenUpstreams,
+        });
+      case 'ivy':
+        return new IvyRegistryProxy({
+          ...common,
+          upstreams: spec.upstreams.map(
+            (u, i): IvyUpstream => ({
+              url: u.url,
+              endpoint: ivyIndexes.get(upstreamKey(spec, i))?.endpoint,
+            }),
+          ),
+        });
+    }
+  });
 
+  const cacheDir = config.cacheDir;
   if (cacheDir) {
     // The malicious DB is read once per process, so each start is when an
     // updated DB first applies; sweep what it now lists out of the cache.
@@ -229,24 +181,21 @@ export async function startServer(
   const app = createServer(config, ivyIndexes);
   app.listen(config.port, config.host, () => {
     console.log(`tengen registry proxy started`);
-    for (const [name, url] of Object.entries(config.upstreams)) {
-      console.log(`  ${name.padEnd(10)}  ${url}`);
-    }
-    for (const repo of config.mavenRepos ?? []) {
-      console.log(
-        `  ${repo.name.padEnd(10)}  ${repo.upstream} (maven, last-modified)`,
-      );
-    }
-    for (const repo of config.ivyRepos ?? []) {
-      const index = ivyIndexes.get(repo.name);
-      console.log(`  ${repo.name.padEnd(10)}  ${repo.upstream} (ivy)`);
-      if (index) {
+    for (const spec of config.registries) {
+      const label = spec.type === spec.name ? spec.name : `${spec.name} (${spec.type})`;
+      console.log(`  /${label}`);
+      for (const [i, upstream] of spec.upstreams.entries()) {
+        const notes = [
+          upstream.timestamps && `timestamps=${upstream.timestamps}`,
+          ivyIndexes.has(upstreamKey(spec, i)) &&
+            `index=artifactory via ${ivyIndexes.get(upstreamKey(spec, i))!.endpoint.apiBase} ` +
+              `(Artifactory ${ivyIndexes.get(upstreamKey(spec, i))!.version})`,
+        ].filter(Boolean);
         console.log(
-          `  ${''.padEnd(10)}  index=artifactory via ` +
-            `${index.endpoint.apiBase} repo=${index.endpoint.repo} ` +
-            `(Artifactory ${index.version})`,
+          `    ${upstream.url}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`,
         );
       }
+      if (spec.publicUrl) console.log(`    public-url: ${spec.publicUrl}`);
     }
     console.log(`  delay:      ${config.delayDays} day(s)`);
     console.log(`  upstream-access: ${config.upstreamAccess}`);

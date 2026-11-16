@@ -244,6 +244,34 @@ describe('PypiRegistryProxy – simple API (/simple/{name}/)', () => {
     expect(files[0]['url']).toBe('/pypi/packages/requests-2.28.0.tar.gz');
   });
 
+  it('rewrites Simple API file URLs to the public URL, even in direct mode', async () => {
+    const p = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      upstreamAccess: 'direct',
+      publicUrl: 'https://pypi.example.com',
+    });
+    const data = {
+      meta: { 'api-version': '1.0' },
+      name: 'requests',
+      versions: ['2.28.0'],
+      files: [makeSimpleFile('requests-2.28.0.tar.gz', '2024-01-01T00:00:00Z')],
+    };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    const res = makeRes();
+    await p.handleRequest(
+      makeReq('/simple/requests/', {
+        accept: 'application/vnd.pypi.simple.v1+json',
+      }),
+      res,
+    );
+    const files = responseBody(res)['files'] as Record<string, unknown>[];
+    expect(files[0]['url']).toBe(
+      'https://pypi.example.com/packages/requests-2.28.0.tar.gz',
+    );
+  });
+
   it('rewrites file URLs to absolute base-url paths in proxied mode', async () => {
     const pipeProxy = new PypiRegistryProxy({
       upstream: 'https://pypi.org',
@@ -499,6 +527,21 @@ describe('PypiRegistryProxy – JSON API file URL rewriting', () => {
     const urls = result['urls'] as Array<{ url: string }>;
     expect(urls[0].url).toBe(
       'https://files.pythonhosted.org/packages/ab/cd/requests-2.28.0.tar.gz',
+    );
+  });
+
+  it('rewrites JSON API file URLs to the public URL, even in direct mode', async () => {
+    const p = new PypiRegistryProxy({
+      upstream: 'https://pypi.org',
+      delayMs: DELAY_MS,
+      maliciousDbPath: '/dev/null',
+      upstreamAccess: 'direct',
+      publicUrl: 'https://pypi.example.com',
+    });
+    const result = await fetchJson(p);
+    const urls = result['urls'] as Array<{ url: string }>;
+    expect(urls[0].url).toBe(
+      'https://pypi.example.com/packages/ab/cd/requests-2.28.0.tar.gz',
     );
   });
 

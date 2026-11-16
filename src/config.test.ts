@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { loadConfig } from "./config.ts";
+import { loadConfig, type Config } from "./config.ts";
+
+/** The first upstream URL of the registry mounted at `name`. */
+function upstreamOf(config: Config, name: string): string | undefined {
+  return config.registries.find((r) => r.name === name)?.upstreams[0]?.url;
+}
 
 describe("loadConfig", () => {
   afterEach(() => {
@@ -9,12 +14,12 @@ describe("loadConfig", () => {
   it("returns defaults when no args are provided", () => {
     const config = loadConfig([]);
     expect(config.port).toBe(3000);
-    expect(config.upstreams.npm).toBe("https://registry.npmjs.org");
-    expect(config.upstreams.pypi).toBe("https://pypi.org");
-    expect(config.upstreams.rubygems).toBe("https://rubygems.org");
-    expect(config.upstreams.go).toBe("https://proxy.golang.org");
-    expect(config.upstreams.composer).toBe("https://packagist.org");
-    expect(config.upstreams.maven).toBe("https://repo.maven.apache.org/maven2");
+    expect(upstreamOf(config, "npm")).toBe("https://registry.npmjs.org");
+    expect(upstreamOf(config, "pypi")).toBe("https://pypi.org");
+    expect(upstreamOf(config, "rubygems")).toBe("https://rubygems.org");
+    expect(upstreamOf(config, "go")).toBe("https://proxy.golang.org");
+    expect(upstreamOf(config, "composer")).toBe("https://packagist.org");
+    expect(upstreamOf(config, "maven")).toBe("https://repo.maven.apache.org/maven2");
     expect(config.delayDays).toBe(7);
   });
 
@@ -30,7 +35,7 @@ describe("loadConfig", () => {
 
   it("parses --npm-upstream", () => {
     const config = loadConfig(["--npm-upstream", "https://my-npm.example.com"]);
-    expect(config.upstreams.npm).toBe("https://my-npm.example.com");
+    expect(upstreamOf(config, "npm")).toBe("https://my-npm.example.com");
   });
 
   it("parses --pypi-upstream", () => {
@@ -38,7 +43,7 @@ describe("loadConfig", () => {
       "--pypi-upstream",
       "https://my-pypi.example.com",
     ]);
-    expect(config.upstreams.pypi).toBe("https://my-pypi.example.com");
+    expect(upstreamOf(config, "pypi")).toBe("https://my-pypi.example.com");
   });
 
   it("parses --rubygems-upstream", () => {
@@ -46,12 +51,12 @@ describe("loadConfig", () => {
       "--rubygems-upstream",
       "https://my-gems.example.com",
     ]);
-    expect(config.upstreams.rubygems).toBe("https://my-gems.example.com");
+    expect(upstreamOf(config, "rubygems")).toBe("https://my-gems.example.com");
   });
 
   it("parses --go-upstream", () => {
     const config = loadConfig(["--go-upstream", "https://my-go.example.com"]);
-    expect(config.upstreams.go).toBe("https://my-go.example.com");
+    expect(upstreamOf(config, "go")).toBe("https://my-go.example.com");
   });
 
   it("parses --composer-upstream", () => {
@@ -59,7 +64,7 @@ describe("loadConfig", () => {
       "--composer-upstream",
       "https://my-composer.example.com",
     ]);
-    expect(config.upstreams.composer).toBe("https://my-composer.example.com");
+    expect(upstreamOf(config, "composer")).toBe("https://my-composer.example.com");
   });
 
   it("parses --maven-upstream", () => {
@@ -67,7 +72,7 @@ describe("loadConfig", () => {
       "--maven-upstream",
       "https://my-maven.example.com",
     ]);
-    expect(config.upstreams.maven).toBe("https://my-maven.example.com");
+    expect(upstreamOf(config, "maven")).toBe("https://my-maven.example.com");
   });
 
   it("parses --delay-days", () => {
@@ -97,8 +102,8 @@ describe("loadConfig", () => {
       "3",
     ]);
     expect(config.port).toBe(4000);
-    expect(config.upstreams.npm).toBe("https://npm.example.com");
-    expect(config.upstreams.pypi).toBe("https://pypi.example.com");
+    expect(upstreamOf(config, "npm")).toBe("https://npm.example.com");
+    expect(upstreamOf(config, "pypi")).toBe("https://pypi.example.com");
     expect(config.delayDays).toBe(3);
   });
 
@@ -195,216 +200,90 @@ describe("loadConfig", () => {
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
 
-  it("has no extra maven repos by default", () => {
+  /** Run loadConfig expecting it to exit with an error; returns the message. */
+  function loadConfigError(args: string[]): string {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+    expect(() => loadConfig(args)).toThrow("process.exit called");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    return String(errSpy.mock.calls[0]?.[0]);
+  }
+
+  it("serves the built-in registries, and no Ivy one, by default", () => {
     const config = loadConfig([]);
-    expect(config.mavenRepos).toEqual([]);
-  });
-
-  it("defaults --maven-timestamp-source to deps-dev", () => {
-    const config = loadConfig([]);
-    expect(config.mavenTimestampSource).toBe("deps-dev");
-  });
-
-  it("parses --maven-timestamp-source last-modified", () => {
-    const config = loadConfig(["--maven-timestamp-source", "last-modified"]);
-    expect(config.mavenTimestampSource).toBe("last-modified");
-  });
-
-  it("exits with an error on an invalid --maven-timestamp-source", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() => loadConfig(["--maven-timestamp-source", "bogus"])).toThrow(
-      "process.exit called",
-    );
-    expect(errSpy).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("parses a single --maven-repo", () => {
-    const config = loadConfig([
-      "--maven-repo",
-      "sbt-releases=https://repo.scala-sbt.org/scalasbt/maven-releases",
+    expect(config.registries.map((r) => r.name)).toEqual([
+      "npm",
+      "pypi",
+      "rubygems",
+      "go",
+      "composer",
+      "maven",
+      "gradle-plugins",
     ]);
-    expect(config.mavenRepos).toEqual([
+  });
+
+  it("replaces a built-in registry with a --registry of its type", () => {
+    const config = loadConfig([
+      "--registry",
+      "maven=https://a.example.com/m2,https://b.example.com/m2",
+    ]);
+    const maven = config.registries.find((r) => r.name === "maven");
+    expect(maven?.upstreams.map((u) => u.url)).toEqual([
+      "https://a.example.com/m2",
+      "https://b.example.com/m2",
+    ]);
+    expect(config.registries.filter((r) => r.name === "maven")).toHaveLength(1);
+  });
+
+  it("adds a --registry with its own name after the built-in ones", () => {
+    const config = loadConfig([
+      "--registry",
+      "ivy=https://a.example.com/ivy#index=artifactory",
+      "--registry",
+      "maven:internal=https://m2.example.com",
+    ]);
+    expect(config.registries.slice(-2)).toEqual([
       {
-        name: "sbt-releases",
-        upstream: "https://repo.scala-sbt.org/scalasbt/maven-releases",
+        type: "ivy",
+        name: "ivy",
+        upstreams: [{ url: "https://a.example.com/ivy", index: "artifactory" }],
+      },
+      {
+        type: "maven",
+        name: "internal",
+        upstreams: [{ url: "https://m2.example.com", timestamps: "last-modified" }],
       },
     ]);
   });
 
-  it("parses repeated --maven-repo flags", () => {
-    const config = loadConfig([
-      "--maven-repo",
-      "a=https://a.example.com/m2",
-      "--maven-repo",
-      "b=https://b.example.com/m2",
-    ]);
-    expect(config.mavenRepos).toEqual([
-      { name: "a", upstream: "https://a.example.com/m2" },
-      { name: "b", upstream: "https://b.example.com/m2" },
-    ]);
-  });
-
-  it("strips a trailing slash from a --maven-repo url", () => {
-    const config = loadConfig([
-      "--maven-repo",
-      "a=https://a.example.com/m2/",
-    ]);
-    expect(config.mavenRepos?.[0]?.upstream).toBe("https://a.example.com/m2");
-  });
-
-  it("keeps an '=' that appears inside a --maven-repo url", () => {
-    const config = loadConfig([
-      "--maven-repo",
-      "a=https://a.example.com/m2?token=abc",
-    ]);
-    expect(config.mavenRepos?.[0]?.upstream).toBe(
-      "https://a.example.com/m2?token=abc",
-    );
-  });
-
-  it.each([
-    ["missing separator", "sbt-releases"],
-    ["empty name", "=https://a.example.com/m2"],
-    ["empty url", "a="],
-    ["uppercase name", "SbtReleases=https://a.example.com/m2"],
-    ["name with a slash", "a/b=https://a.example.com/m2"],
-    ["reserved name", "maven=https://a.example.com/m2"],
-    ["reserved name gradle-plugins", "gradle-plugins=https://a.example.com/m2"],
-    ["relative url", "a=/m2"],
-    ["non-http url", "a=ftp://a.example.com/m2"],
-  ])("exits with an error on a --maven-repo with %s", (_label, value) => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() => loadConfig(["--maven-repo", value])).toThrow(
-      "process.exit called",
-    );
-    expect(errSpy).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("exits with an error on duplicate --maven-repo names", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() =>
-      loadConfig([
-        "--maven-repo",
-        "a=https://a.example.com/m2",
-        "--maven-repo",
-        "a=https://b.example.com/m2",
-      ]),
-    ).toThrow("process.exit called");
-    expect(errSpy).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("has no ivy repos by default", () => {
-    expect(loadConfig([]).ivyRepos).toEqual([]);
-  });
-
-  it("parses --ivy-repo", () => {
-    const config = loadConfig([
-      "--ivy-repo",
-      "sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases",
-    ]);
-    expect(config.ivyRepos).toEqual([
-      {
-        name: "sbt-plugins",
-        upstream: "https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases",
-      },
-    ]);
-  });
-
-  it("parses --ivy-repo with an index source", () => {
-    const config = loadConfig([
-      "--ivy-repo",
-      "sbt-plugins=https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases,index=artifactory",
-    ]);
-    expect(config.ivyRepos).toEqual([
-      {
-        name: "sbt-plugins",
-        upstream: "https://repo.scala-sbt.org/scalasbt/sbt-plugin-releases",
-        index: "artifactory",
-      },
-    ]);
-  });
-
-  it("validates the URL without the index option attached", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() =>
-      loadConfig(["--ivy-repo", "x=not-a-url,index=artifactory"]),
-    ).toThrow("process.exit called");
-    expect(errSpy.mock.calls[0]?.[0]).toContain("'not-a-url'");
-    expect(errSpy.mock.calls[0]?.[0]).not.toContain("index=artifactory");
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("trims a trailing slash that sits before the index option", () => {
+  it("refuses a registry set by both --<type>-upstream and --registry", () => {
     expect(
-      loadConfig([
-        "--ivy-repo",
-        "x=https://a.example.com/ivy/,index=artifactory",
-      ]).ivyRepos,
-    ).toEqual([
-      { name: "x", upstream: "https://a.example.com/ivy", index: "artifactory" },
-    ]);
-  });
-
-  it("exits on an unknown --ivy-repo index source", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() =>
-      loadConfig(["--ivy-repo", "x=https://a.example.com/ivy,index=nexus"]),
-    ).toThrow("process.exit called");
-    expect(errSpy).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("applies the same name rules to --ivy-repo", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() =>
-      loadConfig(["--ivy-repo", "maven=https://a.example.com/ivy"]),
-    ).toThrow("process.exit called");
-    expect(errSpy).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("exits when a name is used by both --maven-repo and --ivy-repo", () => {
-    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit called");
-    });
-
-    expect(() =>
-      loadConfig([
-        "--maven-repo",
-        "dup=https://a.example.com/m2",
-        "--ivy-repo",
-        "dup=https://a.example.com/ivy",
+      loadConfigError([
+        "--npm-upstream",
+        "https://a.example.com",
+        "--registry",
+        "npm=https://b.example.com",
       ]),
-    ).toThrow("process.exit called");
-    expect(errSpy).toHaveBeenCalled();
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    ).toContain("both --npm-upstream and --registry");
+  });
+
+  it("treats --gradle-plugins-upstream as the gradle-plugins registry", () => {
+    const config = loadConfig([
+      "--gradle-plugins-upstream",
+      "https://plugins.example.com/m2",
+    ]);
+    expect(config.registries.find((r) => r.name === "gradle-plugins")).toEqual({
+      type: "gradle-plugins",
+      name: "gradle-plugins",
+      upstreams: [{ url: "https://plugins.example.com/m2", timestamps: "deps-dev" }],
+    });
+  });
+
+  it("refuses a malformed --registry", () => {
+    expect(loadConfigError(["--registry", "nope=https://a.example.com"])).toContain(
+      "unknown registry type",
+    );
   });
 });
